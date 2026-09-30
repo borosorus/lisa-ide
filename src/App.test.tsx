@@ -4,9 +4,12 @@ import App from './App';
 import { CompilerError } from './compile/client';
 import { SOURCE_STORAGE_KEY } from './editor/sourceStorage';
 
-const compileMock = vi.fn();
-const inspectMock = vi.fn();
-const cancelMock = vi.fn();
+const { compileMock, inspectMock, cancelMock } = vi.hoisted(() => ({
+  compileMock: vi.fn(),
+  inspectMock: vi.fn(),
+  cancelMock: vi.fn(),
+}));
+
 vi.mock('./compile/client', () => {
   class CompilerError extends Error {
     constructor(readonly diagnostic: { message: string; line?: number; column?: number }) {
