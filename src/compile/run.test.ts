@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { compileSource } from './run';
-import { createArtifact } from './artifact';
+import { compileSource, inspectProgram } from './run';
+import { createArtifact, parseArtifact } from './artifact';
 import { evaluateSource, SourceError } from './evaluate';
 
 const source = `const p = createProgram();
@@ -23,12 +23,30 @@ describe('restricted LISA source', () => {
       program: output.program, programHash: output.programHash,
       compiler: { name: 'lisa-tooling', version: '0.1.0' },
     });
+    expect(parseArtifact(JSON.stringify(artifact))).toEqual(artifact);
   });
 
   it('hashes the compiled program bytes with Keccak-256', () => {
     const output = compileSource('const p = createProgram(); return p;');
     expect(output.program).toBe('0x00');
     expect(output.programHash).toBe('0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a');
+  });
+
+  it('inspects already-compiled bytecode', () => {
+    const output = inspectProgram('0x00');
+    expect(output).toMatchObject({
+      program: '0x00',
+      byteSize: 1,
+      instructionCount: 1,
+      disassembly: ['0x0000  STOP'],
+    });
+  });
+
+  it('rejects tampered and unsupported artifacts', () => {
+    const artifact = createArtifact(inspectProgram('0x00'));
+    expect(() => parseArtifact(JSON.stringify({ ...artifact, program: '0x01' }))).toThrow(/programHash does not match/);
+    expect(() => parseArtifact(JSON.stringify({ ...artifact, version: 2 }))).toThrow(/Unsupported artifact version/);
+    expect(() => parseArtifact(JSON.stringify({ ...artifact, isa: 'lisa-v2' }))).toThrow(/Unsupported LISA ISA/);
   });
 
   it.each([
