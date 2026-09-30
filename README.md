@@ -1,6 +1,6 @@
 # LISA IDE
 
-A small browser IDE for writing and compiling LISA programs. It uses the published
+A small browser IDE for writing, compiling, and inspecting LISA programs. It uses the published
 [`@bosorus/lisa-evm`](https://www.npmjs.com/package/@bosorus/lisa-evm) package at version `0.1.0`.
 The application is static and needs no backend or wallet.
 
@@ -16,10 +16,11 @@ npm run typecheck
 npm run build
 ```
 
+See [AGENTS.md](AGENTS.md) for architecture constraints and the browser checks expected after editor, Worker, storage, or artifact changes.
+
 ## Authoring source
 
-Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror
-provides syntax highlighting and completions; compilation runs in a Web Worker.
+Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser, and the Source header includes a few small examples that can replace the draft.
 
 ```js
 const p = createProgram();
@@ -41,8 +42,7 @@ for `p.if`, and a final `return p;`. It does not support imports, type annotatio
 arbitrary JavaScript globals, loops, assignment, general property access, or
 other JavaScript or TypeScript syntax. Addresses can be declared as hex strings.
 
-Press **Compile** or **Ctrl/⌘ + Enter**. The IDE shows bytecode, its Keccak-256
-hash, byte and instruction counts, and disassembly. It does not execute programs.
+Press **Compile** or **Ctrl/⌘ + Enter**. Compiler errors retain their source position and are marked in the editor. The IDE shows bytecode, its Keccak-256 hash, byte and instruction counts, and disassembly. It does not execute programs.
 
 ## Artifact
 
@@ -59,6 +59,8 @@ hash, byte and instruction counts, and disassembly. It does not execute programs
 }
 ```
 
-`program` is the compiled bytecode. `programHash` is Keccak-256 of those bytes.
-`isa` labels the current LISA instruction set. The artifact contains no UI state
-or execution configuration.
+`program` is the execution-critical compiled bytecode. `programHash` is Keccak-256 of those bytes and is verified independently on import. Artifact format/version, ISA, compiler metadata, hash, and bytecode are validated before an imported program is decoded and displayed.
+
+Imported artifacts are inspection-only: they show their bytecode, hash, size, and disassembly but do not attempt to recreate authoring source. Exporting an imported artifact preserves its original compiler metadata.
+
+The artifact format is intentionally small so Intereth or another consumer can later accept the same payload without depending on LISA IDE state.
