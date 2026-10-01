@@ -92,6 +92,11 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
         node: target.id,
         message: 'Value produced inside an IF block cannot be used outside that block',
       });
+    } else if (edge.from.port === 'result' && (source.parent ?? '') !== (target.parent ?? '')) {
+      diagnostics.push({
+        node: target.id,
+        message: 'Return data must be decoded in the same IF block as its call',
+      });
     }
   }
   for (const node of project.nodes) {
