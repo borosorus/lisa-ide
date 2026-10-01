@@ -31,6 +31,7 @@ body { background: #0b1220; }
 .node-head { display: flex; align-items: baseline; gap: 8px; min-height: 18px; }
 .node-kind { color: #7790ad; text-transform: uppercase; font-size: 10px; flex: none; }
 .node-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-func { font-size: 11px; color: #bdd4f1; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .node-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; min-height: 22px; }
 .node-row.left { justify-content: flex-start; }
 .node-row.right { justify-content: flex-end; }
@@ -49,4 +50,4 @@ body { background: #0b1220; }
 .react-flow .port-bool { background: #ef8f8f; }
 .react-flow .port-condition { background: #f6c177; }
 .react-flow .port-blocked { background: #3a4c68; border-style: dashed; }
-@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .app-fixed { height: auto; min-height: 100vh; overflow: visible; } .visual-workspace { grid-template-columns: 1fr; grid-template-rows: auto; } .visual-workspace.library-collapsed { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; grid-row: auto; } .visual-workspace .canvas-pane { height: 60vh; } .visual-workspace .side-pane { max-height: 50vh; } .visual-workspace .output-pane { height: auto; } }
+@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .app-fixed { height: auto; min-height: 100vh; overflow: visible; } .visual-workspace { grid-template-columns: 1fr; grid-template-rows: auto; } .visual-workspace.library-collapsed { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; grid-row: auto; } .visual-workspace .canvas-pane { height: 60vh; } .visual-workspace .side-pane { max-height: 50vh; } .visual-workspace .output-pane { height: 45vh; } .visual-workspace .output-pane.output-collapsed { height: auto; } }

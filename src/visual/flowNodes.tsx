@@ -63,13 +63,15 @@ export function LisaNode({ id, data }: NodeProps) {
   useEffect(() => { updateInternals(id); }, [portSignature, id, updateInternals]);
 
   const stop = stopEvents();
-  const title = node.kind === 'call' ? callTitle(node, project) : null;
+  const call = node.kind === 'call' ? callHead(node, project) : null;
 
   return <div className={`lisa-node lisa-node-${node.kind}`} title={nodeLabel(node, project)}>
-    <div className="node-head">
+    {call ? <>
+      <div className="node-head"><span className="node-name" title={call.title}>{call.contract}</span></div>
+      <div className="node-func" title={call.title}>{call.fn}</div>
+    </> : <div className="node-head">
       <span className="node-kind">{node.kind}</span>
-      {title && <span className="node-name" title={title}>{title}</span>}
-    </div>
+    </div>}
     {inputs.map(port => <div className="node-row left" key={port.name}>
       <Handle type="target" id={port.name} position={Position.Left} className={`port port-${port.kind}`} title={`${port.label} (${port.kind})`} />
       <span className={`port-label${port.name === 'value' ? ' payable-value' : ''}`}>{port.label}</span>
@@ -170,11 +172,12 @@ function InlineLiteral({ id, type, value, edit, stop }: {
   />;
 }
 
-function callTitle(node: GraphNode, project: VisualProject): string | null {
+function callHead(node: GraphNode, project: VisualProject): { contract: string; fn: string; title: string } | null {
   if (node.kind !== 'call') return null;
   const contract = project.contracts.find(c => c.id === node.contractId);
   const fn = contract?.functions.find(f => f.signature === node.signature);
-  return fn ? `${contract?.name} · ${fn.signature}` : node.signature;
+  if (!contract || !fn) return { contract: 'contract', fn: node.signature, title: node.signature };
+  return { contract: contract.name, fn: fn.name, title: `${contract.name} · ${fn.signature}` };
 }
 
 export function portsForNode(node: GraphNode, project: VisualProject) {
