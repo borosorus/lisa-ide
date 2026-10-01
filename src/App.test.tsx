@@ -154,4 +154,31 @@ describe('App', () => {
     expect(await screen.findByText(/20-byte hex/)).toBeInTheDocument();
     expect(screen.getByText('No contracts yet. Add one to drag its functions onto the canvas.')).toBeInTheDocument();
   });
+
+  it('compiles the visual graph and exposes read-only generated source', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    fireEvent.click(screen.getByRole('tab', { name: 'Generated source' }));
+    expect(screen.getByLabelText('Generated source')).toHaveTextContent('createProgram');
+    expect(compileMock).toHaveBeenCalledWith(expect.stringContaining('createProgram'));
+  });
+
+  it('shows graph-level errors without invoking the Worker', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
+      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+    ]) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    await screen.findByText('balanceOf');
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    expect(await screen.findByText(/is missing an input/)).toBeInTheDocument();
+    expect(compileMock).not.toHaveBeenCalled();
+  });
 });

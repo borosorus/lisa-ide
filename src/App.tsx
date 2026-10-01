@@ -9,6 +9,7 @@ import { CompilerClient, CompilerError } from './compile/client';
 import { createArtifact, parseArtifact, type ProgramArtifact } from './compile/artifact';
 import type { CompileDiagnostic, CompileOutput } from './compile/types';
 import { ContractsPanel } from './visual/ContractsPanel';
+import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas } from './visual/VisualCanvas';
 import {
   addContract, addNode, removeContract, removeNodes, setNodePosition,
@@ -47,6 +48,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState(0);
   const [notice, setNotice] = useState('');
+  const [generated, setGenerated] = useState('');
   const client = useRef<CompilerClient | null>(null);
   const revision = useRef(0);
 
@@ -64,6 +66,7 @@ export default function App() {
     setImportedArtifact(null);
     setError(null);
     setNotice(nextNotice);
+    setGenerated('');
     client.current?.cancel();
     setBusy(false);
   }
@@ -76,6 +79,7 @@ export default function App() {
       setOutput(null);
       setError(null);
       setImportedArtifact(null);
+      setGenerated('');
       setBusy(false);
     }
     setProject(next);
@@ -102,8 +106,21 @@ export default function App() {
     setNotice('');
     setOutput(null);
     setImportedArtifact(null);
+    let programSource = source;
+    if (mode === 'visual') {
+      try {
+        programSource = generateVisualSource(project);
+      } catch (cause) {
+        setBusy(false);
+        setError({ message: graphMessage(cause) });
+        return;
+      }
+      setGenerated(programSource);
+    } else {
+      setGenerated('');
+    }
     try {
-      const result = await compiler.compile(source);
+      const result = await compiler.compile(programSource);
       if (revision.current === currentRevision) setOutput(result);
     } catch (cause) {
       if (revision.current === currentRevision && (cause as Error).message !== 'Compilation cancelled') {
@@ -112,6 +129,16 @@ export default function App() {
     } finally {
       if (revision.current === currentRevision) setBusy(false);
     }
+  }
+
+  function graphMessage(cause: unknown): string {
+    if (cause instanceof GraphError) {
+      const shown = cause.diagnostics.slice(0, 3)
+        .map(d => (d.node ? `${d.node}: ${d.message}` : d.message));
+      const rest = cause.diagnostics.length - shown.length;
+      return shown.join(' · ') + (rest > 0 ? ` (and ${rest} more)` : '');
+    }
+    return cause instanceof Error ? cause.message : String(cause);
   }
 
   async function importArtifact(file: File) {
@@ -171,7 +198,7 @@ export default function App() {
           <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
         </Box>
         <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end" alignItems="center">
-          <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => { if (next) setMode(next); }} aria-label="Authoring mode">
+          <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => { if (next) { setMode(next); setGenerated(''); } }} aria-label="Authoring mode">
             <ToggleButton value="code">Code</ToggleButton>
             <ToggleButton value="visual">Visual</ToggleButton>
           </ToggleButtonGroup>
@@ -188,7 +215,7 @@ export default function App() {
               }}
             />
           </Button>
-          <Button variant="contained" onClick={compile} disabled={busy || mode === 'visual'} startIcon={busy ? <CircularProgress size={16} /> : undefined}>
+          <Button variant="contained" onClick={compile} disabled={busy} startIcon={busy ? <CircularProgress size={16} /> : undefined}>
             {busy ? 'Working…' : 'Compile'}
           </Button>
         </Stack>
@@ -261,6 +288,7 @@ export default function App() {
   </ThemeProvider>;
 
   function renderOutput() {
+    const showGenerated = generated.length > 0;
     return <>
       {error && <Alert severity="error" sx={{ mb: 2, overflowWrap: 'anywhere' }}>{diagnosticLabel(error)}</Alert>}
       {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
@@ -274,12 +302,14 @@ export default function App() {
         </Stack>
         <Typography variant="caption" color="text.secondary">PROGRAM HASH</Typography>
         <Box className="hash">{output.programHash}</Box>
-        <Tabs value={tab} onChange={(_, value: number) => setTab(value)} sx={{ mt: 1 }}>
+        <Tabs value={showGenerated ? tab : Math.min(tab, 1)} onChange={(_, value: number) => setTab(value)} sx={{ mt: 1 }}>
           <Tab label="Bytecode" />
           <Tab label="Disassembly" />
+          {showGenerated && <Tab label="Generated source" />}
         </Tabs>
-        {tab === 0 ? <Box component="pre" className="code-output" aria-label="Compiled bytecode">{output.program}</Box>
-          : <Box component="pre" className="code-output" aria-label="Disassembly">{output.disassembly.join('\n')}</Box>}
+        {(showGenerated ? tab : Math.min(tab, 1)) === 0 && <Box component="pre" className="code-output" aria-label="Compiled bytecode">{output.program}</Box>}
+        {(showGenerated ? tab : Math.min(tab, 1)) === 1 && <Box component="pre" className="code-output" aria-label="Disassembly">{output.disassembly.join('\n')}</Box>}
+        {showGenerated && tab === 2 && <Box component="pre" className="code-output" aria-label="Generated source" title="Read-only: compiled directly from the graph">{generated}</Box>}
         <Stack direction="row" gap={1} sx={{ mt: 2 }} flexWrap="wrap">
           <Button variant="outlined" onClick={copy}>Copy bytecode</Button>
           <Button variant="outlined" onClick={download}>Export artifact</Button>
