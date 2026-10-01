@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { CompilerError } from './compile/client';
-import { SOURCE_STORAGE_KEY } from './editor/sourceStorage';
+import { PROJECT_STORAGE_KEY } from './visual/storage';
 
 const { compileMock, inspectMock, cancelMock } = vi.hoisted(() => ({
   compileMock: vi.fn(),
@@ -36,7 +36,16 @@ vi.mock('./editor/SourceEditor', () => ({
   </>,
 }));
 vi.mock('./visual/VisualCanvas', () => ({
-  VisualCanvas: () => <div aria-label="Visual canvas" />,
+  VisualCanvas: (props: {
+    project: { contracts: { id: string }[] };
+    onAddCallNode: (contractId: string, signature: string, position: { x: number; y: number }) => void;
+  }) => <>
+    <div aria-label="Visual canvas" />
+    <button
+      aria-label="simulate-drop"
+      onClick={() => props.onAddCallNode(props.project.contracts[0]?.id ?? 'missing', 'balanceOf(address)', { x: 10, y: 20 })}
+    />
+  </>,
 }));
 
 const output = {
@@ -98,7 +107,10 @@ describe('App', () => {
     await screen.findByLabelText('Compiled bytecode');
     fireEvent.change(screen.getByLabelText('LISA source editor'), { target: { value: 'changed' } });
     expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
-    await waitFor(() => expect(localStorage.getItem(SOURCE_STORAGE_KEY)).toBe('changed'));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.codeSource).toBe('changed');
+    });
   });
 
   it('switches between code and visual authoring modes', async () => {
@@ -110,5 +122,36 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Code' }));
     expect(screen.getByLabelText('LISA source editor')).toBeInTheDocument();
     expect(screen.queryByLabelText('Visual canvas')).not.toBeInTheDocument();
+  });
+
+  it('adds a contract from the sidebar and creates a call node from a dropped function', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
+      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+    ]) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    expect(await screen.findByText('balanceOf')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.contracts[0]).toMatchObject({ id: 'c1', name: 'USDC' });
+      expect(saved.visual.nodes).toEqual([
+        { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
+      ]);
+    });
+  });
+
+  it('rejects an invalid contract address in the sidebar', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Bad' } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x123' } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: '[{"type":"function","name":"f","inputs":[],"outputs":[]}]' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    expect(await screen.findByText(/20-byte hex/)).toBeInTheDocument();
+    expect(screen.getByText('No contracts yet. Add one to drag its functions onto the canvas.')).toBeInTheDocument();
   });
 });

@@ -5,11 +5,16 @@ import {
 } from '@mui/material';
 import { SourceEditor } from './editor/SourceEditor';
 import { SOURCE_EXAMPLES, STARTER_SOURCE } from './editor/examples';
-import { loadStoredSource, saveStoredSource } from './editor/sourceStorage';
 import { CompilerClient, CompilerError } from './compile/client';
 import { createArtifact, parseArtifact, type ProgramArtifact } from './compile/artifact';
 import type { CompileDiagnostic, CompileOutput } from './compile/types';
+import { ContractsPanel } from './visual/ContractsPanel';
 import { VisualCanvas } from './visual/VisualCanvas';
+import {
+  addContract, addNode, removeContract, removeNodes, setNodePosition,
+} from './visual/projectState';
+import { createId, emptyProject, type Vec2, type VisualProject } from './visual/model';
+import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import './styles.css';
 
 const theme = createTheme({
@@ -29,9 +34,13 @@ function diagnosticLabel(diagnostic: CompileDiagnostic) {
     : diagnostic.message;
 }
 
+const DEFAULT_STORED = { version: 1 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
+
 export default function App() {
-  const [mode, setMode] = useState<'code' | 'visual'>('code');
-  const [source, setSource] = useState(() => loadStoredSource() ?? STARTER_SOURCE);
+  const stored = useRef(loadStoredProject() ?? DEFAULT_STORED).current;
+  const [mode, setMode] = useState<AuthoringMode>(stored.mode);
+  const [source, setSource] = useState(stored.codeSource ?? STARTER_SOURCE);
+  const [project, setProject] = useState<VisualProject>(stored.visual);
   const [output, setOutput] = useState<CompileOutput | null>(null);
   const [importedArtifact, setImportedArtifact] = useState<ProgramArtifact | null>(null);
   const [error, setError] = useState<CompileDiagnostic | null>(null);
@@ -42,7 +51,7 @@ export default function App() {
   const revision = useRef(0);
 
   useEffect(() => () => client.current?.cancel(), []);
-  useEffect(() => saveStoredSource(source), [source]);
+  useEffect(() => saveStoredProject({ version: 1, mode, codeSource: source, visual: project }), [mode, source, project]);
 
   function replaceSource(next: string, nextNotice = '') {
     if (next === source) {
@@ -57,6 +66,31 @@ export default function App() {
     setNotice(nextNotice);
     client.current?.cancel();
     setBusy(false);
+  }
+
+  /** Semantic graph edits invalidate compiled output; position edits do not. */
+  function editVisual(next: VisualProject, positional = false) {
+    if (!positional) {
+      revision.current++;
+      client.current?.cancel();
+      setOutput(null);
+      setError(null);
+      setImportedArtifact(null);
+      setBusy(false);
+    }
+    setProject(next);
+  }
+
+  function addCallNode(contractId: string, signature: string, position: Vec2) {
+    const id = createId(project.nodes.map(n => n.id), 'call');
+    editVisual(addNode(project, { id, kind: 'call', contractId, signature }, position));
+  }
+
+  function moveNodes(changes: Readonly<Record<string, Vec2>>) {
+    editVisual(Object.entries(changes).reduce(
+      (next, [id, position]) => setNodePosition(next, id, position),
+      project,
+    ), true);
   }
 
   async function compile() {
@@ -199,12 +233,21 @@ export default function App() {
       </Box> : <Box className="visual-workspace">
         <Paper className="pane canvas-pane" elevation={0}>
           <Box className="pane-heading"><Typography variant="subtitle2">Canvas</Typography></Box>
-          <VisualCanvas />
+          <VisualCanvas
+            project={project}
+            onMoveNodes={moveNodes}
+            onAddCallNode={addCallNode}
+            onDeleteNodes={ids => editVisual(removeNodes(project, ids))}
+          />
         </Paper>
         <Paper className="pane side-pane" elevation={0}>
-          <Box className="pane-heading"><Typography variant="subtitle2">Contracts</Typography></Box>
+          <Box className="pane-heading"><Typography variant="subtitle2">Contracts / Nodes</Typography></Box>
           <Box className="side-content">
-            <Typography variant="body2" color="text.secondary">No contracts yet.</Typography>
+            <ContractsPanel
+              contracts={project.contracts}
+              onAddContract={contract => editVisual(addContract(project, contract))}
+              onRemoveContract={id => editVisual(removeContract(project, id))}
+            />
           </Box>
         </Paper>
         <Paper className="pane output-pane" elevation={0}>
