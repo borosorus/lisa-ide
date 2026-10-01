@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow,
   type Connection, type Edge, type Node,
@@ -19,6 +19,8 @@ export interface VisualCanvasProps {
   onDeleteEdges(ids: string[]): void;
   onConnect(from: { node: string; port: string }, to: { node: string; port: string }): void;
   onSelectNode(id: string | null): void;
+  /** Last added node; the view pans to keep new nodes discoverable. */
+  focusNodeId?: string | null;
 }
 
 /**
@@ -32,9 +34,9 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onSelectNode,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onSelectNode, focusNodeId,
 }: VisualCanvasProps) {
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitView } = useReactFlow();
 
   const nodes = useMemo<Node[]>(() => project.nodes.map(node => {
     const ports = portsForNode(node, project);
@@ -53,6 +55,12 @@ function Canvas({
     target: edge.to.node,
     targetHandle: edge.to.port,
   })), [project.edges]);
+
+  useEffect(() => {
+    if (focusNodeId && project.nodes.some(n => n.id === focusNodeId)) {
+      void fitView({ nodes: [{ id: focusNodeId }], maxZoom: 1, duration: 250 });
+    }
+  }, [focusNodeId, project.nodes, fitView]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();

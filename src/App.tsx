@@ -51,6 +51,7 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [generated, setGenerated] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const client = useRef<CompilerClient | null>(null);
   const revision = useRef(0);
 
@@ -89,6 +90,7 @@ export default function App() {
 
   function addCallNode(contractId: string, signature: string, position: Vec2) {
     const id = createId(project.nodes.map(n => n.id), 'call');
+    setFocusNodeId(id);
     editVisual(addNode(project, { id, kind: 'call', contractId, signature }, position));
   }
 
@@ -103,6 +105,7 @@ export default function App() {
     const id = createId(project.nodes.map(n => n.id), prefix);
     const count = project.nodes.length;
     const position = { x: 60 + (count % 5) * 220, y: 60 + Math.floor(count / 5) * 160 };
+    setFocusNodeId(id);
     editVisual(addNode(project, { ...partial, id } as GraphNode, position));
   }
 
@@ -289,6 +292,7 @@ export default function App() {
             onDeleteEdges={ids => editVisual(ids.reduce(removeEdge, project))}
             onConnect={(from, to) => editVisual(connectPort(project, { from, to }))}
             onSelectNode={setSelectedId}
+            focusNodeId={focusNodeId}
           />
         </Paper>
         <Paper className="pane side-pane" elevation={0}>
