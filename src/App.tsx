@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, CssBaseline, MenuItem, Paper, Select,
-  Stack, Tab, Tabs, ThemeProvider, Typography, createTheme,
+  Stack, Tab, Tabs, ThemeProvider, ToggleButton, ToggleButtonGroup, Typography, createTheme,
 } from '@mui/material';
 import { SourceEditor } from './editor/SourceEditor';
 import { SOURCE_EXAMPLES, STARTER_SOURCE } from './editor/examples';
@@ -9,6 +9,7 @@ import { loadStoredSource, saveStoredSource } from './editor/sourceStorage';
 import { CompilerClient, CompilerError } from './compile/client';
 import { createArtifact, parseArtifact, type ProgramArtifact } from './compile/artifact';
 import type { CompileDiagnostic, CompileOutput } from './compile/types';
+import { VisualCanvas } from './visual/VisualCanvas';
 import './styles.css';
 
 const theme = createTheme({
@@ -29,6 +30,7 @@ function diagnosticLabel(diagnostic: CompileDiagnostic) {
 }
 
 export default function App() {
+  const [mode, setMode] = useState<'code' | 'visual'>('code');
   const [source, setSource] = useState(() => loadStoredSource() ?? STARTER_SOURCE);
   const [output, setOutput] = useState<CompileOutput | null>(null);
   const [importedArtifact, setImportedArtifact] = useState<ProgramArtifact | null>(null);
@@ -134,7 +136,11 @@ export default function App() {
           <Typography variant="h5" fontWeight={700}>LISA IDE</Typography>
           <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
         </Box>
-        <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end">
+        <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end" alignItems="center">
+          <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => { if (next) setMode(next); }} aria-label="Authoring mode">
+            <ToggleButton value="code">Code</ToggleButton>
+            <ToggleButton value="visual">Visual</ToggleButton>
+          </ToggleButtonGroup>
           <Button variant="outlined" component="label" disabled={busy}>
             Import artifact
             <input
@@ -148,12 +154,12 @@ export default function App() {
               }}
             />
           </Button>
-          <Button variant="contained" onClick={compile} disabled={busy} startIcon={busy ? <CircularProgress size={16} /> : undefined}>
+          <Button variant="contained" onClick={compile} disabled={busy || mode === 'visual'} startIcon={busy ? <CircularProgress size={16} /> : undefined}>
             {busy ? 'Working…' : 'Compile'}
           </Button>
         </Stack>
       </Stack>
-      <Box className="workspace">
+      {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
             <Typography variant="subtitle2">Source</Typography>
@@ -187,32 +193,55 @@ export default function App() {
         <Paper className="pane output-pane" elevation={0}>
           <Box className="pane-heading"><Typography variant="subtitle2">Output</Typography></Box>
           <Box className="output-content">
-            {error && <Alert severity="error" sx={{ mb: 2, overflowWrap: 'anywhere' }}>{diagnosticLabel(error)}</Alert>}
-            {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
-            {busy && <Typography color="text.secondary">Processing program…</Typography>}
-            {!busy && !output && !error && <Typography color="text.secondary">Compile source or import an artifact to inspect the program.</Typography>}
-            {output && <>
-              <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
-                <Chip label={`${output.byteSize} bytes`} size="small" />
-                <Chip label={`${output.instructionCount} instructions`} size="small" />
-                {importedArtifact && <Chip label="Imported artifact" size="small" variant="outlined" />}
-              </Stack>
-              <Typography variant="caption" color="text.secondary">PROGRAM HASH</Typography>
-              <Box className="hash">{output.programHash}</Box>
-              <Tabs value={tab} onChange={(_, value: number) => setTab(value)} sx={{ mt: 1 }}>
-                <Tab label="Bytecode" />
-                <Tab label="Disassembly" />
-              </Tabs>
-              {tab === 0 ? <Box component="pre" className="code-output" aria-label="Compiled bytecode">{output.program}</Box>
-                : <Box component="pre" className="code-output" aria-label="Disassembly">{output.disassembly.join('\n')}</Box>}
-              <Stack direction="row" gap={1} sx={{ mt: 2 }} flexWrap="wrap">
-                <Button variant="outlined" onClick={copy}>Copy bytecode</Button>
-                <Button variant="outlined" onClick={download}>Export artifact</Button>
-              </Stack>
-            </>}
+            {renderOutput()}
           </Box>
         </Paper>
-      </Box>
+      </Box> : <Box className="visual-workspace">
+        <Paper className="pane canvas-pane" elevation={0}>
+          <Box className="pane-heading"><Typography variant="subtitle2">Canvas</Typography></Box>
+          <VisualCanvas />
+        </Paper>
+        <Paper className="pane side-pane" elevation={0}>
+          <Box className="pane-heading"><Typography variant="subtitle2">Contracts</Typography></Box>
+          <Box className="side-content">
+            <Typography variant="body2" color="text.secondary">No contracts yet.</Typography>
+          </Box>
+        </Paper>
+        <Paper className="pane output-pane" elevation={0}>
+          <Box className="pane-heading"><Typography variant="subtitle2">Output</Typography></Box>
+          <Box className="output-content">
+            {renderOutput()}
+          </Box>
+        </Paper>
+      </Box>}
     </Box>
   </ThemeProvider>;
+
+  function renderOutput() {
+    return <>
+      {error && <Alert severity="error" sx={{ mb: 2, overflowWrap: 'anywhere' }}>{diagnosticLabel(error)}</Alert>}
+      {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
+      {busy && <Typography color="text.secondary">Processing program…</Typography>}
+      {!busy && !output && !error && <Typography color="text.secondary">Compile source or import an artifact to inspect the program.</Typography>}
+      {output && <>
+        <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
+          <Chip label={`${output.byteSize} bytes`} size="small" />
+          <Chip label={`${output.instructionCount} instructions`} size="small" />
+          {importedArtifact && <Chip label="Imported artifact" size="small" variant="outlined" />}
+        </Stack>
+        <Typography variant="caption" color="text.secondary">PROGRAM HASH</Typography>
+        <Box className="hash">{output.programHash}</Box>
+        <Tabs value={tab} onChange={(_, value: number) => setTab(value)} sx={{ mt: 1 }}>
+          <Tab label="Bytecode" />
+          <Tab label="Disassembly" />
+        </Tabs>
+        {tab === 0 ? <Box component="pre" className="code-output" aria-label="Compiled bytecode">{output.program}</Box>
+          : <Box component="pre" className="code-output" aria-label="Disassembly">{output.disassembly.join('\n')}</Box>}
+        <Stack direction="row" gap={1} sx={{ mt: 2 }} flexWrap="wrap">
+          <Button variant="outlined" onClick={copy}>Copy bytecode</Button>
+          <Button variant="outlined" onClick={download}>Export artifact</Button>
+        </Stack>
+      </>}
+    </>;
+  }
 }

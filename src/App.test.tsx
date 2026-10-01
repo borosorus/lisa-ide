@@ -35,6 +35,9 @@ vi.mock('./editor/SourceEditor', () => ({
     {diagnostic?.line && <span data-testid="editor-diagnostic">{diagnostic.line}:{diagnostic.column}</span>}
   </>,
 }));
+vi.mock('./visual/VisualCanvas', () => ({
+  VisualCanvas: () => <div aria-label="Visual canvas" />,
+}));
 
 const output = {
   program: '0x00', programHash: '0xhash', byteSize: 1,
@@ -96,5 +99,16 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText('LISA source editor'), { target: { value: 'changed' } });
     expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
     await waitFor(() => expect(localStorage.getItem(SOURCE_STORAGE_KEY)).toBe('changed'));
+  });
+
+  it('switches between code and visual authoring modes', async () => {
+    render(<App />);
+    expect(screen.getByLabelText('LISA source editor')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(await screen.findByLabelText('Visual canvas')).toBeInTheDocument();
+    expect(screen.queryByLabelText('LISA source editor')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Code' }));
+    expect(screen.getByLabelText('LISA source editor')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Visual canvas')).not.toBeInTheDocument();
   });
 });

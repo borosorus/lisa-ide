@@ -9,4 +9,11 @@ body { background: #0b1220; }
 .output-content { padding: 20px; overflow: auto; flex: 1; }
 .hash { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #bdd4f1; overflow-wrap: anywhere; margin: 4px 0 16px; }
 .code-output { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: #dceaff; background: #101827; padding: 16px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 180px; max-height: 55vh; overflow: auto; }
-@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } }
+.visual-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; padding: 16px; flex: 1; min-height: 0; }
+.visual-workspace .canvas-pane { grid-row: 1; grid-column: 1; min-height: 480px; }
+.visual-workspace .side-pane { grid-row: 1; grid-column: 2; min-height: 480px; }
+.visual-workspace .output-pane { grid-row: 2; grid-column: 1 / -1; min-height: 260px; }
+.canvas-host { flex: 1; min-height: 0; position: relative; background: #101827; }
+.canvas-host .react-flow__controls-button { background: #172236; border-bottom: 1px solid #26354c; fill: #bdd4f1; }
+.side-content { padding: 12px 16px; overflow: auto; flex: 1; }
+@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .visual-workspace { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; } .visual-workspace .canvas-pane { grid-row: auto; } .visual-workspace .side-pane { grid-row: auto; } }
