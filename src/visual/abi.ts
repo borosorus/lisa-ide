@@ -96,6 +96,12 @@ export function parseAbiJson(text: string): AbiParseResult {
         unsupported = input;
         break;
       }
+      if (/^bytes\d/.test(kind)) {
+        // encodeCall only accepts bytesN arguments as compile-time constants
+        // (hex strings / byte arrays), which the graph cannot author yet.
+        unsupported = `${input} (bytesN arguments are not supported yet)`;
+        break;
+      }
       canonical.push(kind);
     }
     if (unsupported) {

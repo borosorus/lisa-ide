@@ -6,6 +6,7 @@ const ADDRESS = '0x1111111111111111111111111111111111111111';
 const FNS: ContractFunction[] = [
   { signature: 'balanceOf(address)', name: 'balanceOf', inputs: ['address'], outputs: ['uint256'], mutability: 'view' },
   { signature: 'deposit(uint256)', name: 'deposit', inputs: ['uint256'], outputs: [], mutability: 'nonpayable' },
+  { signature: 'flag(bool)', name: 'flag', inputs: ['bool'], outputs: [], mutability: 'nonpayable' },
   { signature: 'stake()', name: 'stake', inputs: [], outputs: [], mutability: 'payable' },
 ];
 
@@ -65,6 +66,42 @@ describe('validateProject', () => {
   it('rejects a word offset that is not a word multiple', () => {
     const p = project({ nodes: [{ id: 'r', kind: 'return', decoder: 'word', offset: 16 }] });
     expect(messages(p).join()).toContain('multiple of 32');
+  });
+
+  it('rejects negative, fractional, and unsafe word offsets', () => {
+    for (const offset of [-32, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+      const p = project({ nodes: [{ id: 'r', kind: 'return', decoder: 'word', offset }] });
+      expect(messages(p).join()).toContain('non-negative multiple of 32');
+    }
+  });
+
+  it('routes booleans into bool slots only', () => {
+    const boolToUint = project({
+      nodes: [
+        { id: 'lit', kind: 'literal', literalType: 'bool', literal: 'true' },
+        { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+      ],
+      edges: [edge('lit', 'out', 'dep', 'arg:0')],
+    });
+    expect(messages(boolToUint).join()).toContain('Cannot feed uint256 #1 from a bool output');
+
+    const boolToBool = project({
+      nodes: [
+        { id: 'lit', kind: 'literal', literalType: 'bool', literal: 'true' },
+        { id: 'flg', kind: 'call', contractId: 'c1', signature: 'flag(bool)' },
+      ],
+      edges: [edge('lit', 'out', 'flg', 'arg:0')],
+    });
+    expect(validateProject(boolToBool)).toEqual([]);
+
+    const boolToIf = project({
+      nodes: [
+        { id: 'lit', kind: 'literal', literalType: 'bool', literal: 'true' },
+        { id: 'if1', kind: 'if' },
+      ],
+      edges: [edge('lit', 'out', 'if1', 'condition')],
+    });
+    expect(messages(boolToIf).join()).toContain('Cannot feed if from a bool output');
   });
 
   it('rejects incompatible port types', () => {
@@ -184,6 +221,35 @@ describe('stableOrder', () => {
     });
     expect(stableOrder(p).order).toEqual(['callB', 'src', 'callA', 'ret']);
     expect(stableOrder(p).cycle).toEqual([]);
+  });
+
+  it('orders IF blocks after producers their body consumes, whatever the array order', () => {
+    const nodes: GraphNode[] = [
+      { id: 'if1', kind: 'if' },
+      { id: 'cond', kind: 'context', name: 'GAS' },
+      { id: 'self1', kind: 'context', name: 'SELF' },
+      { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
+      { id: 'ret1', kind: 'return', decoder: 'uint256' },
+      { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if1' },
+    ];
+    const edges = [
+      edge('cond', 'out', 'if1', 'condition'),
+      edge('self1', 'out', 'call1', 'arg:0'),
+      edge('call1', 'result', 'ret1', 'result'),
+      edge('ret1', 'out', 'dep', 'arg:0'),
+    ];
+    const ifFirst = project({ nodes, edges });
+    expect(validateProject(ifFirst)).toEqual([]);
+    const { order, cycle } = stableOrder(ifFirst);
+    expect(cycle).toEqual([]);
+    expect(order.indexOf('ret1')).toBeLessThan(order.indexOf('if1'));
+    expect(order.indexOf('call1')).toBeLessThan(order.indexOf('if1'));
+
+    // reversing the array must not change the semantic order of the relevant pair
+    const reversed = project({ nodes: [...nodes].reverse(), edges });
+    const rev = stableOrder(reversed);
+    expect(rev.cycle).toEqual([]);
+    expect(rev.order.indexOf('ret1')).toBeLessThan(rev.order.indexOf('if1'));
   });
 
   it('lists remaining nodes as the cycle', () => {

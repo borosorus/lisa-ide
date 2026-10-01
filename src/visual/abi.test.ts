@@ -28,13 +28,23 @@ describe('parseAbiJson', () => {
       { type: 'function', name: 'signed', inputs: [{ type: 'int256' }], outputs: [] },
       { type: 'function', name: 'dynamicBytes', inputs: [{ type: 'bytes' }], outputs: [] },
       { type: 'function', name: 'odd', inputs: [{ type: 'uint7' }], outputs: [] },
-      { type: 'function', name: 'ok', inputs: [{ type: 'bool' }, { type: 'bytes32' }, { type: 'uint8' }], outputs: [] },
+      { type: 'function', name: 'fixed', inputs: [{ type: 'bool' }, { type: 'bytes32' }, { type: 'uint8' }], outputs: [] },
+      { type: 'function', name: 'fine', inputs: [{ type: 'bool' }, { type: 'uint8' }], outputs: [{ type: 'bytes32' }] },
     ]));
-    expect(functions.map(f => f.signature)).toEqual(['ok(bool,bytes32,uint8)']);
+    expect(functions.map(f => f.signature)).toEqual(['fine(bool,uint8)']);
     expect(rejected.map(r => r.name)).toEqual([
-      'bad(uint256[])', 'tuple(tuple)', 'string(string)', 'signed(int256)', 'dynamicBytes(bytes)', 'odd(uint7)',
+      'bad(uint256[])', 'tuple(tuple)', 'string(string)', 'signed(int256)', 'dynamicBytes(bytes)', 'odd(uint7)', 'fixed(bool,bytes32,uint8)',
     ]);
     expect(rejected[0].reason).toContain('uint256[]');
+  });
+
+  it('rejects bytesN arguments because the graph cannot author constant bytes yet', () => {
+    const { functions, rejected } = parseAbiJson(JSON.stringify([
+      { type: 'function', name: 'consume', inputs: [{ type: 'bytes32' }], outputs: [] },
+    ]));
+    expect(functions).toEqual([]);
+    expect(rejected[0].name).toBe('consume(bytes32)');
+    expect(rejected[0].reason).toContain('bytesN arguments are not supported');
   });
 
   it('canonicalizes bare uint and deduplicates overloads', () => {

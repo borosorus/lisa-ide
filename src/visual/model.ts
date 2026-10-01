@@ -32,7 +32,7 @@ export interface ContractResource {
   readonly functions: readonly ContractFunction[];
 }
 
-export type PortKind = 'value' | 'address' | 'condition' | 'result';
+export type PortKind = 'value' | 'address' | 'bool' | 'condition' | 'result';
 
 export const CONTEXT_NAMES = ['SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE'] as const;
 export type ContextName = (typeof CONTEXT_NAMES)[number];

@@ -18,7 +18,7 @@ export function inputPorts(node: GraphNode, project: VisualProject): PortSpec[] 
       const fn = findFunction(project, node.contractId, node.signature);
       const ports: PortSpec[] = (fn?.inputs ?? []).map((type, index) => ({
         name: `arg:${index}`,
-        kind: type === 'address' ? 'address' : 'value',
+        kind: type === 'address' ? 'address' : type === 'bool' ? 'bool' : 'value',
         label: abiLabel(type, index),
       }));
       if (fn?.mutability === 'payable') {
@@ -47,7 +47,11 @@ export function outputPorts(node: GraphNode): PortSpec[] {
     case 'context':
       return [{ name: 'out', kind: node.name === 'SELF' || node.name === 'CALLER' ? 'address' : 'value', label: node.name }];
     case 'literal':
-      return [{ name: 'out', kind: node.literalType === 'address' ? 'address' : 'value', label: 'value' }];
+      return [{
+        name: 'out',
+        kind: node.literalType === 'address' ? 'address' : node.literalType === 'bool' ? 'bool' : 'value',
+        label: 'value',
+      }];
     case 'binary':
       return [{ name: 'out', kind: node.op === 'lt' || node.op === 'gt' || node.op === 'eq' ? 'condition' : 'value', label: 'value' }];
     case 'return':
@@ -67,13 +71,19 @@ export function isStaticCall(node: Extract<GraphNode, { kind: 'call' }>, project
 }
 
 /**
- * Compatibility is deliberately coarse: words flow where words are expected,
- * addresses only feed address slots, and raw call results only feed decoders.
+ * Compatibility mirrors what the builder can actually encode: word-valued
+ * sources (values, conditions) and address outputs feed value slots,
+ * addresses only feed address slots, booleans only exist as literals and fit
+ * bool slots, and raw call results only feed decoders.
  */
 export function canConnect(source: PortSpec, target: PortSpec): boolean {
-  if (target.kind === 'result') return source.kind === 'result';
-  if (target.kind === 'address') return source.kind === 'address';
-  return source.kind !== 'result';
+  switch (target.kind) {
+    case 'result': return source.kind === 'result';
+    case 'address': return source.kind === 'address';
+    case 'bool': return source.kind === 'bool' || source.kind === 'value';
+    case 'condition': return source.kind === 'condition' || source.kind === 'value';
+    case 'value': return source.kind === 'value' || source.kind === 'address' || source.kind === 'condition';
+  }
 }
 
 function abiLabel(type: string, index: number): string {

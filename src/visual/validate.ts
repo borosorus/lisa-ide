@@ -62,8 +62,8 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
       if (!ok) diagnostics.push({ node: node.id, message: `Literal "${node.literal}" is not a valid ${node.literalType}` });
     }
     if (node.kind === 'return' && node.decoder === 'word'
-        && (node.offset === undefined || node.offset % 32 !== 0)) {
-      diagnostics.push({ node: node.id, message: 'word() offset must be a multiple of 32' });
+        && !(Number.isSafeInteger(node.offset ?? 0) && (node.offset ?? 0) >= 0 && (node.offset ?? 0) % 32 === 0)) {
+      diagnostics.push({ node: node.id, message: 'word() offset must be a non-negative multiple of 32' });
     }
   }
 
@@ -128,6 +128,20 @@ export function stableOrder(project: VisualProject): { order: string[]; cycle: s
     if (edge.from.node === edge.to.node) continue;
     if (!byId.has(edge.from.node) || !byId.has(edge.to.node)) continue;
     deps.get(edge.to.node)?.add(edge.from.node);
+  }
+  // A body node's constants are emitted inside its IF statement, so the IF
+  // block itself must wait for everything its body depends on.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of project.nodes) {
+      if (!node.parent) continue;
+      const set = deps.get(node.parent);
+      const own = deps.get(node.id);
+      if (!set || !own) continue;
+      if (!set.has(node.id)) { set.add(node.id); changed = true; }
+      for (const d of own) if (!set.has(d)) { set.add(d); changed = true; }
+    }
   }
   const done = new Set<string>();
   const order: string[] = [];

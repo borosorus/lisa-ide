@@ -222,6 +222,64 @@ return p;`);
     expect(() => compileSource(source)).not.toThrow();
   });
 
+  it('compiles arithmetic with literal receivers on either side', () => {
+    const project: VisualProject = {
+      ...emptyProject(),
+      contracts: [{ id: 'c1', name: 'V', address: VAULT, functions: VAULT_FNS }],
+      nodes: [
+        { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '5' },
+        { id: 'gas1', kind: 'context', name: 'GAS' },
+        { id: 'sub1', kind: 'binary', op: 'sub' },
+        { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+      ],
+      edges: [
+        { id: 'e1', from: { node: 'lit1', port: 'out' }, to: { node: 'sub1', port: 'lhs' } },
+        { id: 'e2', from: { node: 'gas1', port: 'out' }, to: { node: 'sub1', port: 'rhs' } },
+        { id: 'e3', from: { node: 'sub1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+      ],
+    };
+    const source = generateVisualSource(project);
+    expect(source).toContain('(5n).sub(GAS)');
+    expect(() => compileSource(source)).not.toThrow();
+  });
+
+  it('emits producers before IF blocks whose body consumes their results, in any node order', () => {
+    const nodes: GraphNode[] = [
+      { id: 'if1', kind: 'if' },
+      { id: 'gas1', kind: 'context', name: 'GAS' },
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1000' },
+      { id: 'cmp1', kind: 'binary', op: 'gt' },
+      { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
+      { id: 'self1', kind: 'context', name: 'SELF' },
+      { id: 'ret1', kind: 'return', decoder: 'uint256' },
+      { id: 'call2', kind: 'call', contractId: 'c2', signature: 'deposit(uint256)', parent: 'if1' },
+    ];
+    const edges: GraphEdge[] = [
+      { id: 'e1', from: { node: 'gas1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+      { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
+      { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+      { id: 'e4', from: { node: 'self1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+      { id: 'e5', from: { node: 'call1', port: 'result' }, to: { node: 'ret1', port: 'result' } },
+      { id: 'e6', from: { node: 'ret1', port: 'out' }, to: { node: 'call2', port: 'arg:0' } },
+    ];
+    const base: VisualProject = {
+      contracts: [
+        { id: 'c1', name: 'TOKEN', address: USDC, functions: TOKEN_FNS },
+        { id: 'c2', name: 'VAULT', address: VAULT, functions: VAULT_FNS },
+      ],
+      nodes, edges, positions: {},
+    };
+    const reversed: VisualProject = { ...base, nodes: [...nodes].reverse() };
+    const fromGraph = generateVisualSource(base);
+    const ifStatement = fromGraph.split('\n').findIndex(line => line.includes('p.if('));
+    const callStatement = fromGraph.split('\n').findIndex(line => line.includes('staticCall'));
+    expect(callStatement).toBeGreaterThanOrEqual(0);
+    expect(callStatement).toBeLessThan(ifStatement);
+    expect(() => compileSource(fromGraph)).not.toThrow();
+    // array order must never change semantics
+    expect(generateVisualSource(reversed)).toBe(fromGraph);
+  });
+
   it('refuses invalid graphs with graph diagnostics', () => {
     const project: VisualProject = {
       ...emptyProject(),
