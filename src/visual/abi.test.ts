@@ -1,0 +1,87 @@
+import { describe, expect, it } from 'vitest';
+import { canonicalInputType, isValidAddress, parseAbiJson } from './abi';
+
+const ERC20 = JSON.stringify([
+  { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'o', type: 'address' }], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'transfer', stateMutability: 'nonpayable', inputs: [{ name: 'to', type: 'address' }, { name: 'amt', type: 'uint256' }], outputs: [{ type: 'bool' }] },
+  { type: 'function', name: 'approve', stateMutability: 'nonpayable', inputs: [{ name: 'sp', type: 'address' }, { name: 'amt', type: 'uint256' }], outputs: [{ type: 'bool' }] },
+  { type: 'event', name: 'Transfer', inputs: [{ name: 'from', type: 'address', indexed: true }], anonymous: false },
+]);
+
+describe('parseAbiJson', () => {
+  it('extracts canonical callable functions and skips non-functions', () => {
+    const { functions, rejected } = parseAbiJson(ERC20);
+    expect(rejected).toEqual([]);
+    expect(functions.map(f => f.signature)).toEqual([
+      'balanceOf(address)', 'transfer(address,uint256)', 'approve(address,uint256)',
+    ]);
+    expect(functions[0].mutability).toBe('view');
+    expect(functions[1].mutability).toBe('nonpayable');
+    expect(functions[0].outputs).toEqual(['uint256']);
+  });
+
+  it('rejects unsupported argument types with a reason', () => {
+    const { functions, rejected } = parseAbiJson(JSON.stringify([
+      { type: 'function', name: 'bad', inputs: [{ type: 'uint256[]' }], outputs: [] },
+      { type: 'function', name: 'tuple', inputs: [{ type: 'tuple', components: [] }], outputs: [] },
+      { type: 'function', name: 'string', inputs: [{ type: 'string' }], outputs: [] },
+      { type: 'function', name: 'signed', inputs: [{ type: 'int256' }], outputs: [] },
+      { type: 'function', name: 'dynamicBytes', inputs: [{ type: 'bytes' }], outputs: [] },
+      { type: 'function', name: 'odd', inputs: [{ type: 'uint7' }], outputs: [] },
+      { type: 'function', name: 'ok', inputs: [{ type: 'bool' }, { type: 'bytes32' }, { type: 'uint8' }], outputs: [] },
+    ]));
+    expect(functions.map(f => f.signature)).toEqual(['ok(bool,bytes32,uint8)']);
+    expect(rejected.map(r => r.name)).toEqual([
+      'bad(uint256[])', 'tuple(tuple)', 'string(string)', 'signed(int256)', 'dynamicBytes(bytes)', 'odd(uint7)',
+    ]);
+    expect(rejected[0].reason).toContain('uint256[]');
+  });
+
+  it('canonicalizes bare uint and deduplicates overloads', () => {
+    const { functions } = parseAbiJson(JSON.stringify([
+      { type: 'function', name: 'f', inputs: [{ type: 'uint' }], outputs: [] },
+      { type: 'function', name: 'f', inputs: [{ type: 'uint256' }], outputs: [] },
+      { type: 'function', name: 'g', inputs: [{ type: 'uint64' }], outputs: [] },
+    ]));
+    expect(functions.map(f => f.signature)).toEqual(['f(uint256)', 'g(uint64)']);
+  });
+
+  it('defaults missing stateMutability to nonpayable', () => {
+    const { functions } = parseAbiJson(JSON.stringify([
+      { type: 'function', name: 'x', inputs: [], outputs: [] },
+    ]));
+    expect(functions[0].signature).toBe('x()');
+    expect(functions[0].mutability).toBe('nonpayable');
+  });
+
+  it('throws clear errors for malformed ABIs', () => {
+    expect(() => parseAbiJson('not json')).toThrowError(/valid JSON/);
+    expect(() => parseAbiJson('{"name":"x"}')).toThrowError(/JSON array/);
+    expect(() => parseAbiJson('[{"type":"event","name":"E"}]')).toThrowError(/no callable functions/);
+  });
+});
+
+describe('canonicalInputType', () => {
+  it('accepts the static ABI subset', () => {
+    expect(canonicalInputType('address')).toBe('address');
+    expect(canonicalInputType('bool')).toBe('bool');
+    expect(canonicalInputType('uint8')).toBe('uint8');
+    expect(canonicalInputType('uint248')).toBe('uint248');
+    expect(canonicalInputType('bytes1')).toBe('bytes1');
+    expect(canonicalInputType('bytes32')).toBe('bytes32');
+  });
+  it('rejects everything else', () => {
+    for (const bad of ['int256', 'string', 'tuple', 'uint256[3]', 'uint257', 'uint0', 'bytes33', 'bytes0', 'fixed128x18', 'function', 42]) {
+      expect(canonicalInputType(bad as never)).toBeNull();
+    }
+  });
+});
+
+describe('isValidAddress', () => {
+  it('requires 20-byte hex', () => {
+    expect(isValidAddress('0x1111111111111111111111111111111111111111')).toBe(true);
+    expect(isValidAddress('0x123')).toBe(false);
+    expect(isValidAddress('1111111111111111111111111111111111111111')).toBe(false);
+    expect(isValidAddress(undefined)).toBe(false);
+  });
+});
