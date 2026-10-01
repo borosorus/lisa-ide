@@ -14,6 +14,8 @@ const nodeTypes = { lisa: LisaNode };
 /** Lets the sidebar place click-added nodes in the visible viewport. */
 export interface CanvasApi {
   viewportCenter(): Vec2 | null;
+  /** Flow-space rect of the currently visible canvas area. */
+  viewportRect(): { x: number; y: number; width: number; height: number } | null;
 }
 
 export interface VisualCanvasProps {
@@ -59,6 +61,13 @@ function Canvas({
       const rect = hostRef.current?.getBoundingClientRect();
       if (!rect || rect.width === 0) return null;
       return screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+    },
+    viewportRect: () => {
+      const rect = hostRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0) return null;
+      const topLeft = screenToFlowPosition({ x: rect.left, y: rect.top });
+      const bottomRight = screenToFlowPosition({ x: rect.right, y: rect.bottom });
+      return { x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y };
     },
   }), [screenToFlowPosition]);
 

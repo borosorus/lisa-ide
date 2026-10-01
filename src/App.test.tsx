@@ -217,6 +217,20 @@ describe('App', () => {
     });
   });
 
+  it('places repeated click-added nodes at separated positions', async () => {
+    render(<App />);
+    toVisual();
+    await addContract();
+    await expandContract('USDC');
+    for (let i = 1; i <= 3; i++) {
+      fireEvent.click(screen.getByRole('button', { name: 'balanceOf' }));
+      await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.nodes).toHaveLength(i));
+    }
+    const positions = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.positions;
+    const seen = new Set(Object.values(positions as Record<string, { x: number; y: number }>).map(p => `${p.x},${p.y}`));
+    expect(seen.size).toBe(3);
+  });
+
   it('compiles the visual graph and exposes read-only generated source', async () => {
     compileMock.mockResolvedValue(output);
     render(<App />);

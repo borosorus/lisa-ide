@@ -17,6 +17,7 @@ import {
 } from './visual/projectState';
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type Vec2, type VisualProject } from './visual/model';
 import { NodeInspector, VisualPalette } from './visual/NodePanel';
+import { nodeSize, occupiedRects, spawnPosition } from './visual/spawnPosition';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import './styles.css';
 
@@ -90,10 +91,10 @@ export default function App() {
     setProject(prev => typeof transform === 'function' ? transform(prev) : transform);
   }
 
-  function addCallNode(contractId: string, signature: string, position: Vec2) {
+  function addCallNode(contractId: string, signature: string, anchor: Vec2) {
     const id = createId(project.nodes.map(n => n.id), 'call');
     setFocusNodeId(id);
-    editVisual(p => addNode(p, { id, kind: 'call', contractId, signature }, position));
+    editVisual(p => addNode(p, { id, kind: 'call', contractId, signature }, spawnNear(p, anchor, 'call')));
   }
 
   function moveNodes(changes: Readonly<Record<string, Vec2>>) {
@@ -105,16 +106,30 @@ export default function App() {
 
   function addVisualNode(partial: GraphNodeDraft, prefix: string) {
     const id = createId(project.nodes.map(n => n.id), prefix);
-    const count = project.nodes.length;
-    const position = { x: 60 + (count % 5) * 220, y: 60 + Math.floor(count / 5) * 160 };
     setFocusNodeId(id);
-    editVisual(p => addNode(p, { ...partial, id } as GraphNode, position));
+    editVisual(p => {
+      const kind = (partial as GraphNode).kind;
+      return addNode(p, { ...partial, id } as GraphNode, spawnNear(p, viewportCenter(), kind));
+    });
+  }
+
+  /** One placement mechanism for every new node: visible-viewport spiral. */
+  function spawnNear(p: VisualProject, anchor: Vec2, kind: GraphNode['kind']): Vec2 {
+    return spawnPosition({
+      anchor,
+      size: nodeSize(kind),
+      occupied: occupiedRects(p.nodes, p.positions),
+      bounds: canvasApi.current?.viewportRect() ?? null,
+    });
+  }
+
+  function viewportCenter(): Vec2 {
+    return canvasApi.current?.viewportCenter() ?? { x: 320, y: 240 };
   }
 
   /** Click-to-add from the library: land the node in the visible viewport. */
   function addFunctionNode(contractId: string, signature: string) {
-    const center = canvasApi.current?.viewportCenter();
-    addCallNode(contractId, signature, center ?? { x: 60, y: 60 });
+    addCallNode(contractId, signature, viewportCenter());
   }
 
   function editSelectedNode(patch: Record<string, unknown>) {
