@@ -221,4 +221,23 @@ describe('App', () => {
       ]);
     });
   });
+
+  it('restores a saved visual project on load', () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [], nodes: [{ id: 'ctx1', kind: 'context', name: 'SELF' }], edges: [],
+        positions: { ctx1: { x: 1, y: 2 } },
+      },
+    }));
+    render(<App />);
+    expect(screen.getByLabelText('Visual canvas')).toBeInTheDocument();
+    expect(screen.queryByLabelText('LISA source editor')).not.toBeInTheDocument();
+  });
+
+  it('recovers gracefully from a corrupt saved project', () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, '{"version":1,"visual":"broken');
+    render(<App />);
+    expect(screen.getByLabelText('LISA source editor')).toBeInTheDocument();
+  });
 });
