@@ -117,6 +117,13 @@ describe('outputHeadOffsets', () => {
     expect(outputHeadOffsets(['uint256[3]', 'uint256'])).toEqual([0, 96]);
   });
 
+  it('gives a fixed array of dynamic elements one head word', () => {
+    // string[2] is itself dynamic: it is referenced by a single head pointer.
+    expect(outputHeadOffsets(['string[2]', 'uint256'])).toEqual([0, 32]);
+    expect(outputHeadOffsets(['string[2][3]', 'bool'])).toEqual([0, 32]);
+    expect(outputHeadOffsets(['uint256[2][2]', 'address'])).toEqual([0, 128]);
+  });
+
   it('nulls out outputs after a head width that cannot be established', () => {
     expect(outputHeadOffsets(['tuple', 'uint256'])).toEqual([null, null]);
     expect(outputHeadOffsets(['uint256', 'tuple', 'bool'])).toEqual([0, null, null]);

@@ -56,10 +56,25 @@ function headWidth(type: string, depth: number): number | null {
   if (type === 'string' || type === 'bytes' || type.endsWith('[]')) return 1;
   const array = /^(.*)\[(\d+)\]$/.exec(type);
   if (array) {
-    const inner = headWidth(array[1], depth + 1);
     const count = Number(array[2]);
-    return inner === null || count > 256 ? null : inner * count;
+    if (count > 256) return null;
+    const innerDynamic = isDynamicType(array[1], depth + 1);
+    if (innerDynamic === null) return null;
+    // A fixed array of dynamic elements is itself dynamic: one head pointer.
+    if (innerDynamic) return 1;
+    const inner = headWidth(array[1], depth + 1);
+    return inner === null ? null : inner * count;
   }
+  return null;
+}
+
+/** Whether an ABI type encodes with a tail; null when the type is unknown. */
+function isDynamicType(type: string, depth: number): boolean | null {
+  if (depth > 4) return null;
+  if (canonicalWordType(type)) return false;
+  if (type === 'string' || type === 'bytes' || type.endsWith('[]')) return true;
+  const array = /^(.*)\[(\d+)\]$/.exec(type);
+  if (array) return isDynamicType(array[1], depth + 1);
   return null;
 }
 
