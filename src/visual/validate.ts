@@ -58,10 +58,6 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     if (node.kind === 'literal' && !isValidLiteral(node.literalType, node.literal)) {
       diagnostics.push({ node: node.id, message: `Literal "${node.literal}" is not a valid ${node.literalType}` });
     }
-    if (node.kind === 'return' && node.decoder === 'word'
-        && !(Number.isSafeInteger(node.offset ?? 0) && (node.offset ?? 0) >= 0 && (node.offset ?? 0) % 32 === 0)) {
-      diagnostics.push({ node: node.id, message: 'word() offset must be a non-negative multiple of 32' });
-    }
   }
 
   const drivers = new Map<string, number>();
@@ -70,11 +66,16 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     const target = byId.get(edge.to.node);
     if (!source) { diagnostics.push({ node: edge.to.node, message: `Edge source node "${edge.from.node}" is missing` }); continue; }
     if (!target) { diagnostics.push({ node: edge.from.node, message: `Edge target node "${edge.to.node}" is missing` }); continue; }
-    const sourcePort = outputPorts(source).find(p => p.name === edge.from.port);
+    const sourcePort = outputPorts(source, project).find(p => p.name === edge.from.port);
     const targetPort = inputPorts(target, project).find(p => p.name === edge.to.port);
     if (!sourcePort) { diagnostics.push({ node: source.id, port: edge.from.port, message: `Output port "${edge.from.port}" no longer exists` }); continue; }
     if (!targetPort) { diagnostics.push({ node: target.id, port: edge.to.port, message: `Input port "${edge.to.port}" no longer exists` }); continue; }
-    if (!canConnect(sourcePort, targetPort)) {
+    if (sourcePort.connectable === false || targetPort.connectable === false) {
+      diagnostics.push({
+        node: target.id, port: edge.to.port,
+        message: `Cannot connect through ${sourcePort.name}: ${sourcePort.reason ?? 'port is not connectable'}`,
+      });
+    } else if (!canConnect(sourcePort, targetPort)) {
       diagnostics.push({
         node: target.id, port: edge.to.port,
         message: `Cannot feed ${targetPort.label} from a ${sourcePort.kind} output`,

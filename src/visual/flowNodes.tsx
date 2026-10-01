@@ -27,8 +27,6 @@ export function nodeLabel(node: GraphNode, project: VisualProject): string {
         : node.literal;
     case 'binary':
       return ({ add: '+', sub: '−', mul: '×', div: '÷', lt: '<', gt: '>', eq: '=' })[node.op];
-    case 'return':
-      return node.decoder === 'word' ? `word(${node.offset ?? 0})` : `${node.decoder}()`;
     case 'if':
       return 'IF';
   }
@@ -57,5 +55,5 @@ function slot(index: number, count: number): React.CSSProperties {
 }
 
 export function portsForNode(node: GraphNode, project: VisualProject) {
-  return { inputs: inputPorts(node, project), outputs: outputPorts(node) };
+  return { inputs: inputPorts(node, project), outputs: outputPorts(node, project) };
 }

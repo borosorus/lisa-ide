@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Button, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import {
-  BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, WORD_DECODERS,
+  BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES,
   type GraphNode, type GraphNodeDraft, type LiteralType, type VisualProject,
 } from './model';
 
@@ -16,7 +16,6 @@ export function VisualPalette({ onAdd }: {
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'context', name: 'SELF' }, 'ctx')}>Context</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'literal', literalType: 'uint', literal: '0' }, 'lit')}>Literal</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'binary', op: 'add' }, 'op')}>Operation</Button>
-      <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'return', decoder: 'uint256' }, 'ret')}>Decode</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'if' }, 'if')}>IF</Button>
     </Stack>
   </Box>;
@@ -52,16 +51,6 @@ export function NodeInspector({ node, project, onChange }: {
 
     {node.kind === 'binary' && <SelectField label="Operation" value={node.op} options={[...BINARY_OPS]}
       render={op => OP_LABELS[op]} onChange={op => onChange({ op })} />}
-
-    {node.kind === 'return' && <>
-      <SelectField label="Decode" value={node.decoder} options={[...WORD_DECODERS]}
-        onChange={decoder => onChange({ decoder, offset: decoder === 'word' ? node.offset ?? 0 : undefined })} />
-      {node.decoder === 'word' && <TextField size="small" label="Word byte offset" value={node.offset ?? 0}
-        onChange={e => {
-          const value = Math.max(0, Math.trunc(Number(e.target.value)));
-          onChange({ offset: Number.isSafeInteger(value) ? value : 0 });
-        }} />}
-    </>}
 
     {node.kind === 'call' && <Typography variant="body2" color="text.secondary">
       Call nodes come from dragging contract functions; they follow the contract resource address automatically.

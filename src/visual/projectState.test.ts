@@ -42,26 +42,27 @@ describe('contracts', () => {
     expect(p.positions.lit1).toEqual({ x: 0, y: 0 });
   });
 
-  it('cascades decoders fed only by the removed contract\'s calls', () => {
+  it('removing a contract keeps consumers of its call outputs but drops the edges', () => {
     let p = projectWithCall();
-    p = addNode(p, { id: 'ret1', kind: 'return', decoder: 'uint256' }, { x: 0, y: 0 });
-    p = addEdge(p, { from: { node: 'call1', port: 'result' }, to: { node: 'ret1', port: 'result' } });
+    p = addNode(p, { id: 'dep1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' }, { x: 0, y: 0 });
+    p = addEdge(p, { from: { node: 'call1', port: 'out:0' }, to: { node: 'dep1', port: 'arg:0' } });
     p = removeContract(p, 'c1');
+    // dep1 belongs to the same contract's function set; it is a call node
+    // of c1, so it cascades, and its now-dangling input edge goes with it.
     expect(p.nodes.map(n => n.id)).toEqual(['lit1']);
     expect(p.edges).toEqual([]);
-    expect(p.positions.ret1).toBeUndefined();
   });
 
-  it('keeps decoders whose call belongs to a different contract', () => {
+  it('a surviving consumer of another contract keeps its other edges', () => {
     let p = projectWithCall();
     p = addContract(p, contract('DAI')); // c2
     const c2 = p.contracts[1].id;
     p = addNode(p, { id: 'call2', kind: 'call', contractId: c2, signature: 'balanceOf(address)' }, { x: 0, y: 0 });
-    p = addNode(p, { id: 'ret2', kind: 'return', decoder: 'uint256' }, { x: 0, y: 0 });
-    p = addEdge(p, { from: { node: 'call2', port: 'result' }, to: { node: 'ret2', port: 'result' } });
+    p = addEdge(p, { from: { node: 'call1', port: 'out:0' }, to: { node: 'call2', port: 'arg:0' } });
     p = removeContract(p, 'c1');
-    expect(p.nodes.map(n => n.id)).toEqual(['lit1', 'call2', 'ret2']);
-    expect(p.edges.some(e => e.from.node === 'call2')).toBe(true);
+    expect(p.nodes.map(n => n.id)).toEqual(['lit1', 'call2']);
+    expect(p.edges).toEqual([]); // the cross-contract edge was dangling
+    expect(p.positions.call2).toEqual({ x: 0, y: 0 });
   });
 });
 

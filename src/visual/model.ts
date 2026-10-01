@@ -92,16 +92,13 @@ export interface ContractResource {
   readonly functions: readonly ContractFunction[];
 }
 
-export type PortKind = 'value' | 'address' | 'bool' | 'condition' | 'result';
+export type PortKind = 'value' | 'address' | 'bool' | 'condition';
 
 export const CONTEXT_NAMES = ['SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE'] as const;
 export type ContextName = (typeof CONTEXT_NAMES)[number];
 
 export const BINARY_OPS = ['add', 'sub', 'mul', 'div', 'lt', 'gt', 'eq'] as const;
 export type BinaryOp = (typeof BINARY_OPS)[number];
-
-export const WORD_DECODERS = ['uint256', 'bool', 'bytes32', 'word'] as const;
-export type WordDecoder = (typeof WORD_DECODERS)[number];
 
 export const LITERAL_TYPES = ['uint', 'address', 'bool'] as const;
 export type LiteralType = (typeof LITERAL_TYPES)[number];
@@ -124,7 +121,6 @@ export type GraphNode =
   | (NodeBase & { readonly kind: 'context'; readonly name: ContextName })
   | (NodeBase & { readonly kind: 'literal'; readonly literalType: LiteralType; readonly literal: string })
   | (NodeBase & { readonly kind: 'binary'; readonly op: BinaryOp })
-  | (NodeBase & { readonly kind: 'return'; readonly decoder: WordDecoder; readonly offset?: number })
   | (NodeBase & { readonly kind: 'if' });
 
 export interface GraphEndpoint {

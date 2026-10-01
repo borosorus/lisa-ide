@@ -19,7 +19,6 @@ function starterLikeProject(): VisualProject {
   const nodes: GraphNode[] = [
     { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
     { id: 'self1', kind: 'context', name: 'SELF' },
-    { id: 'ret1', kind: 'return', decoder: 'uint256' },
     { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1000' },
     { id: 'cmp1', kind: 'binary', op: 'gt' },
     { id: 'if1', kind: 'if' },
@@ -28,12 +27,11 @@ function starterLikeProject(): VisualProject {
   ];
   const edges: GraphEdge[] = [
     { id: 'e1', from: { node: 'self1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
-    { id: 'e2', from: { node: 'call1', port: 'result' }, to: { node: 'ret1', port: 'result' } },
-    { id: 'e3', from: { node: 'ret1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+    { id: 'e3', from: { node: 'call1', port: 'out:0' }, to: { node: 'cmp1', port: 'lhs' } },
     { id: 'e4', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
     { id: 'e5', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+    { id: 'e7', from: { node: 'call1', port: 'out:0' }, to: { node: 'call2', port: 'arg:0' } },
   ];
-  edges.push({ id: 'e7', from: { node: 'ret1', port: 'out' }, to: { node: 'call2', port: 'arg:0' } });
   return {
     contracts: [
       { id: 'c1', name: 'TOKEN', address: USDC, functions: TOKEN_FNS },
@@ -96,29 +94,69 @@ return p;`);
     expect(generateVisualSource(a)).not.toBe(generateVisualSource(b));
   });
 
-  it('emits decoder handles for multi-word results', () => {
+  it('decodes only the outputs an edge consumes, at their head offsets', () => {
     const project: VisualProject = {
       ...emptyProject(),
       contracts: [{
         id: 'c1', name: 'TOKEN', address: USDC,
-        functions: [{ signature: 'snapshot(address)', name: 'snapshot', inputs: ['address'], outputs: ['uint256', 'bytes32'], mutability: 'view' }],
+        functions: [
+          {
+            signature: 'snapshot(address)', name: 'snapshot', inputs: ['address'],
+            outputs: ['uint256', 'bytes32'], mutability: 'view',
+            outputNames: ['total', 'root'],
+          },
+          { signature: 'store(uint256)', name: 'store', inputs: ['bytes32'], outputs: [], mutability: 'nonpayable' },
+        ],
       }],
       nodes: [
         { id: 'call1', kind: 'call', contractId: 'c1', signature: 'snapshot(address)' },
         { id: 'self1', kind: 'context', name: 'SELF' },
-        { id: 'ret1', kind: 'return', decoder: 'uint256' },
-        { id: 'ret2', kind: 'return', decoder: 'word', offset: 32 },
+        { id: 'storeA', kind: 'call', contractId: 'c1', signature: 'store(uint256)' },
       ],
       edges: [
         { id: 'e1', from: { node: 'self1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
-        { id: 'e2', from: { node: 'call1', port: 'result' }, to: { node: 'ret1', port: 'result' } },
-        { id: 'e3', from: { node: 'call1', port: 'result' }, to: { node: 'ret2', port: 'result' } },
+        { id: 'e2', from: { node: 'call1', port: 'out:1' }, to: { node: 'storeA', port: 'arg:0' } },
+      ],
+    };
+    // Only output 1 (root) is consumed, so only its word is decoded.
+    const source = generateVisualSource(project);
+    expect(source).toContain('const snapshot_call1 = p.staticCall(c_TOKEN, encodeCall("snapshot(address)", [SELF])).word(32);');
+    expect(source).not.toContain('uint256()');
+    expect(() => compileSource(source)).not.toThrow();
+  });
+
+  it('decodes each used output of a multi-output call exactly once', () => {
+    const project: VisualProject = {
+      ...emptyProject(),
+      contracts: [{
+        id: 'c1', name: 'TOKEN', address: USDC,
+        functions: [
+          { signature: 'snapshot(address)', name: 'snapshot', inputs: ['address'], outputs: ['uint256', 'bytes32'], mutability: 'view' },
+          { signature: 'store(uint256)', name: 'store', inputs: ['bytes32'], outputs: [], mutability: 'nonpayable' },
+        ],
+      }],
+      nodes: [
+        { id: 'call1', kind: 'call', contractId: 'c1', signature: 'snapshot(address)' },
+        { id: 'self1', kind: 'context', name: 'SELF' },
+        { id: 'storeA', kind: 'call', contractId: 'c1', signature: 'store(uint256)' },
+        { id: 'storeB', kind: 'call', contractId: 'c1', signature: 'store(uint256)' },
+        { id: 'storeC', kind: 'call', contractId: 'c1', signature: 'store(uint256)' },
+      ],
+      edges: [
+        { id: 'e1', from: { node: 'self1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+        { id: 'e2', from: { node: 'call1', port: 'out:0' }, to: { node: 'storeA', port: 'arg:0' } },
+        { id: 'e3', from: { node: 'call1', port: 'out:1' }, to: { node: 'storeB', port: 'arg:0' } },
+        // fan-out: the same output feeding a third consumer reuses the name
+        { id: 'e4', from: { node: 'call1', port: 'out:0' }, to: { node: 'storeC', port: 'arg:0' } },
       ],
     };
     const source = generateVisualSource(project);
     expect(source).toContain('const r_call1 = p.staticCall(c_TOKEN, encodeCall("snapshot(address)", [SELF]));');
-    expect(source).toContain('const snapshot_uint256_ret1 = r_call1.uint256();');
-    expect(source).toContain('const snapshot_w1_ret2 = r_call1.word(32);');
+    expect(source).toContain('const snapshot_call1_out0 = r_call1.uint256();');
+    expect(source).toContain('const snapshot_call1_out1 = r_call1.word(32);');
+    // one call, one decode per used output, regardless of consumer count
+    expect(source.split('\n').filter(l => l.includes('staticCall'))).toHaveLength(1);
+    expect(source.split('\n').filter(l => l.includes('snapshot_call1_out0 ='))).toHaveLength(1);
     expect(() => compileSource(source)).not.toThrow();
   });
 
@@ -251,7 +289,6 @@ return p;`);
       { id: 'cmp1', kind: 'binary', op: 'gt' },
       { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
       { id: 'self1', kind: 'context', name: 'SELF' },
-      { id: 'ret1', kind: 'return', decoder: 'uint256' },
       { id: 'call2', kind: 'call', contractId: 'c2', signature: 'deposit(uint256)', parent: 'if1' },
     ];
     const edges: GraphEdge[] = [
@@ -259,8 +296,7 @@ return p;`);
       { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
       { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
       { id: 'e4', from: { node: 'self1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
-      { id: 'e5', from: { node: 'call1', port: 'result' }, to: { node: 'ret1', port: 'result' } },
-      { id: 'e6', from: { node: 'ret1', port: 'out' }, to: { node: 'call2', port: 'arg:0' } },
+      { id: 'e6', from: { node: 'call1', port: 'out:0' }, to: { node: 'call2', port: 'arg:0' } },
     ];
     const base: VisualProject = {
       contracts: [

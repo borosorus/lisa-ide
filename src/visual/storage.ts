@@ -1,6 +1,6 @@
 import { SOURCE_STORAGE_KEY } from '../editor/sourceStorage';
 import {
-  BINARY_OPS, CONTEXT_NAMES, isValidLiteral, WORD_DECODERS,
+  BINARY_OPS, CONTEXT_NAMES, canonicalWordType, isValidLiteral, outputHeadOffsets,
   emptyProject,
   type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type Vec2, type VisualProject,
 } from './model';
@@ -93,10 +93,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function parseVisual(value: unknown): VisualProject {
   if (!isRecord(value)) throw new Error('Saved visual project must be an object');
   const contracts = parseItems(value.contracts, parseContract, 'contracts');
-  const nodes = parseItems(value.nodes, parseNode, 'nodes');
+  if (!Array.isArray(value.nodes)) throw new Error('Saved nodes must be an array');
+  const nodes: GraphNode[] = [];
+  const decoders = new Map<string, LegacyDecoder>();
+  for (const entry of value.nodes) {
+    const node = parseNode(entry);
+    if (node) nodes.push(node);
+    else {
+      const decoder = parseLegacyDecoder(entry);
+      if (decoder) decoders.set(decoder.id, decoder);
+    }
+  }
   const nodeIds = new Set(nodes.map(n => n.id));
-  // Edges dangling from repaired-away nodes cannot mean anything either.
-  const edges = parseItems(value.edges, parseEdge, 'edges')
+  const parsedEdges = parseItems(value.edges, parseEdge, 'edges');
+  // Fold the old explicit-decoder graphs onto the call's own output ports.
+  const { kept, legacy } = splitLegacyEdges(parsedEdges, new Set(decoders.keys()));
+  const edges = [...kept, ...foldLegacyDecoders(legacy, decoders, nodes, contracts)]
     .filter(e => nodeIds.has(e.from.node) && nodeIds.has(e.to.node));
   const positions = parsePositions(value.positions);
   return {
@@ -174,20 +186,74 @@ function parseNode(value: unknown): GraphNode | null {
     case 'binary':
       if (!BINARY_OPS.includes(value.op as never)) return null;
       return { ...base, kind: 'binary', op: value.op as BinaryOp };
-    case 'return': {
-      if (!WORD_DECODERS.includes(value.decoder as never)) return null;
-      if (value.decoder === 'word') {
-        if (typeof value.offset !== 'number' || !Number.isSafeInteger(value.offset) || value.offset < 0 || value.offset % 32 !== 0) return null;
-        return { ...base, kind: 'return', decoder: 'word', offset: value.offset };
-      }
-      if (value.offset !== undefined) return null;
-      return { ...base, kind: 'return', decoder: value.decoder as 'uint256' | 'bool' | 'bytes32' };
-    }
     case 'if':
       return { ...base, kind: 'if' };
     default:
       return null;
   }
+}
+
+interface LegacyDecoder {
+  readonly id: string;
+  /** Byte offset of the decoded word in return data (aliases read word 0). */
+  readonly offset: number;
+}
+
+function parseLegacyDecoder(value: unknown): LegacyDecoder | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || value.kind !== 'return') return null;
+  if (value.decoder === 'word') {
+    if (typeof value.offset !== 'number' || !Number.isSafeInteger(value.offset) || value.offset < 0 || value.offset % 32 !== 0) return null;
+    return { id: value.id, offset: value.offset };
+  }
+  if (value.decoder !== 'uint256' && value.decoder !== 'bool' && value.decoder !== 'bytes32') return null;
+  if (value.offset !== undefined) return null;
+  return { id: value.id, offset: 0 };
+}
+
+/** Edges that touch a legacy decoder, or old raw-result plumbing. */
+function splitLegacyEdges(
+  edges: readonly GraphEdge[], decoderIds: ReadonlySet<string>,
+): { kept: GraphEdge[]; legacy: GraphEdge[] } {
+  const kept: GraphEdge[] = [];
+  const legacy: GraphEdge[] = [];
+  for (const edge of edges) {
+    if (decoderIds.has(edge.from.node) || decoderIds.has(edge.to.node) || edge.from.port === 'result') {
+      legacy.push(edge);
+    } else {
+      kept.push(edge);
+    }
+  }
+  return { kept, legacy };
+}
+
+/** Rewire `decoder.out -> consumer` edges onto `call.out:<index> -> consumer`. */
+function foldLegacyDecoders(
+  legacy: readonly GraphEdge[], decoders: ReadonlyMap<string, LegacyDecoder>,
+  nodes: readonly GraphNode[], contracts: readonly ContractResource[],
+): GraphEdge[] {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  // Each decoder belongs to the call whose raw result fed it.
+  const owner = new Map<string, { call: string; offset: number }>();
+  for (const edge of legacy) {
+    const decoder = decoders.get(edge.to.node);
+    if (decoder && edge.to.port === 'result' && byId.get(edge.from.node)?.kind === 'call') {
+      owner.set(edge.to.node, { call: edge.from.node, offset: decoder.offset });
+    }
+  }
+  const folded: GraphEdge[] = [];
+  for (const edge of legacy) {
+    const o = owner.get(edge.from.node);
+    if (!o || edge.from.port !== 'out') continue;
+    const call = byId.get(o.call);
+    if (call?.kind !== 'call') continue;
+    const fn = contracts.find(c => c.id === call.contractId)?.functions.find(f => f.signature === call.signature);
+    if (!fn) continue;
+    const offsets = outputHeadOffsets(fn.outputs);
+    const index = offsets.findIndex((offset, i) => offset === o.offset && canonicalWordType(fn.outputs[i]) !== null);
+    if (index === -1) continue; // position no longer exists or was never safely decodable
+    folded.push({ id: edge.id, from: { node: o.call, port: `out:${index}` }, to: edge.to });
+  }
+  return folded;
 }
 
 function parseEdge(value: unknown): GraphEdge | null {

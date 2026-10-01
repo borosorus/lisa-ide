@@ -24,15 +24,8 @@ export function updateContract(
 }
 
 export function removeContract(project: VisualProject, id: string): VisualProject {
-  const removed = new Set(project.nodes.filter(n => n.kind === 'call' && n.contractId === id).map(n => n.id));
-  // Decoders fed exclusively by those calls would be left as dangling errors.
-  for (const node of project.nodes) {
-    if (node.kind === 'return'
-        && project.edges.some(e => e.to.node === node.id && e.to.port === 'result' && removed.has(e.from.node))) {
-      removed.add(node.id);
-    }
-  }
-  const withoutCalls = dropNodes(project, [...removed]);
+  const removed = project.nodes.filter(n => n.kind === 'call' && n.contractId === id).map(n => n.id);
+  const withoutCalls = dropNodes(project, removed);
   return { ...withoutCalls, contracts: withoutCalls.contracts.filter(c => c.id !== id) };
 }
 

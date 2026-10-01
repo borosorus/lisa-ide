@@ -1,5 +1,6 @@
 import {
-  isReadFunction, type ContractResource, type GraphNode, type VisualProject,
+  canonicalWordType, isReadFunction, outputHeadOffsets,
+  type ContractResource, type GraphEndpoint, type GraphNode, type VisualProject,
 } from './model';
 import { findFunction } from './ports';
 import { stableOrder, validateProject, type GraphDiagnostic } from './validate';
@@ -28,15 +29,14 @@ const RESERVED = new Set([
 ]);
 
 type CallNode = Extract<GraphNode, { kind: 'call' }>;
-type ReturnNode = Extract<GraphNode, { kind: 'return' }>;
 
 interface Context {
   project: VisualProject;
   byId: Map<string, GraphNode>;
-  /** `${node}:${port}` of the single feeding edge, per input port. */
-  feed: Map<string, string>;
-  /** Return-node ids per call, in stable emission order. */
-  returnsByCall: Map<string, string[]>;
+  /** The single feeding edge per input port (`${node}:${port}`). */
+  feed: Map<string, GraphEndpoint>;
+  /** Output indices consumed from each call, ascending and deduplicated. */
+  usedOutputs: Map<string, number[]>;
   names: NamePool;
 }
 
@@ -47,33 +47,19 @@ export function generateVisualSource(project: VisualProject): string {
   const ctx: Context = {
     project,
     byId: new Map(project.nodes.map(n => [n.id, n])),
-    feed: new Map(project.edges.map(e => [`${e.to.node}:${e.to.port}`, `${e.from.node}:${e.from.port}`])),
-    returnsByCall: new Map(),
+    feed: new Map(project.edges.map(e => [`${e.to.node}:${e.to.port}`, e.from])),
+    usedOutputs: collectUsedOutputs(project),
     names: new NamePool(),
   };
 
-  for (const contract of project.contracts) {
-    if (project.nodes.some(n => n.kind === 'call' && n.contractId === contract.id)) {
-      ctx.names.assign(`c_${identifier(contract.name)}`, contractKey(contract));
-    }
-  }
-
-  const { order } = stableOrder(project);
-  for (const id of order) {
-    const node = ctx.byId.get(id);
-    if (node?.kind !== 'return') continue;
-    const source = ctx.feed.get(`${id}:result`);
-    if (source) {
-      const callId = source.slice(0, source.lastIndexOf(':'));
-      ctx.returnsByCall.set(callId, [...(ctx.returnsByCall.get(callId) ?? []), id]);
-    }
-  }
-
   const lines: string[] = ['const p = createProgram();'];
   for (const contract of project.contracts) {
-    const varName = ctx.names.get(contractKey(contract));
-    if (varName) push(lines, '', `const ${varName} = "${contract.address.toLowerCase()}";`);
+    if (project.nodes.some(n => n.kind === 'call' && n.contractId === contract.id)) {
+      const varName = ctx.names.assign(`c_${identifier(contract.name)}`, contractKey(contract));
+      push(lines, '', `const ${varName} = "${contract.address.toLowerCase()}";`);
+    }
   }
+  const { order } = stableOrder(project);
   emitScope(ctx, order, undefined, lines, 0);
   push(lines, '', 'return p;');
   return lines.join('\n');
@@ -87,6 +73,19 @@ function push(lines: string[], ...texts: string[]): void {
       lines.push(text);
     }
   }
+}
+
+function collectUsedOutputs(project: VisualProject): Map<string, number[]> {
+  const used = new Map<string, Set<number>>();
+  for (const edge of project.edges) {
+    const index = /^out:(\d+)$/.exec(edge.from.port);
+    if (index && project.nodes.some(n => n.id === edge.from.node && n.kind === 'call')) {
+      const set = used.get(edge.from.node) ?? new Set<number>();
+      set.add(Number(index[1]));
+      used.set(edge.from.node, set);
+    }
+  }
+  return new Map([...used].map(([id, set]) => [id, [...set].sort((a, b) => a - b)]));
 }
 
 function emitScope(ctx: Context, order: readonly string[], parent: string | undefined, lines: string[], depth: number): void {
@@ -117,35 +116,48 @@ function emitCall(ctx: Context, node: CallNode, lines: string[], pad: string): v
   const callText = `p.${isReadFunction(fn) ? 'staticCall' : 'call'}(${target}, ${encoded}`
     + (valueFeed ? `, ${exprOfSource(ctx, valueFeed)}` : '') + ')';
 
-  const decoders = ctx.returnsByCall.get(node.id) ?? [];
-  if (decoders.length === 0) {
+  // Decoding happens at the call site because return data goes stale after
+  // the next call; only outputs an edge consumes get a decoded constant.
+  const used = ctx.usedOutputs.get(node.id) ?? [];
+  if (used.length === 0) {
     lines.push(`${pad}${callText};`);
-  } else if (decoders.length === 1) {
-    const ret = ctx.byId.get(decoders[0]) as ReturnNode;
-    lines.push(`${pad}const ${ctx.names.assign(`${identifier(fn.name)}_${identifier(node.id)}`, `ret:${ret.id}`)} = ${callText}.${decoderCall(ret)};`);
+  } else if (used.length === 1) {
+    const name = ctx.names.assign(`${identifier(fn.name)}_${identifier(node.id)}`, decodeKey(node.id, used[0]));
+    lines.push(`${pad}const ${name} = ${callText}.${decoderCall(fn, used[0])};`);
   } else {
     const handle = ctx.names.assign(`r_${identifier(node.id)}`, `call:${node.id}`);
     lines.push(`${pad}const ${handle} = ${callText};`);
-    for (const retId of decoders) {
-      const ret = ctx.byId.get(retId) as ReturnNode;
-      const varName = ctx.names.assign(`${identifier(fn.name)}_${decoderTag(ret)}_${identifier(ret.id)}`, `ret:${retId}`);
-      lines.push(`${pad}const ${varName} = ${handle}.${decoderCall(ret)};`);
+    for (const index of used) {
+      const name = ctx.names.assign(
+        `${identifier(fn.name)}_${identifier(node.id)}_out${index}`, decodeKey(node.id, index),
+      );
+      lines.push(`${pad}const ${name} = ${handle}.${decoderCall(fn, index)};`);
     }
   }
 }
 
-/** Expression text for whatever feeds `${nodeId}:${port}`; pure nodes inline. */
+/** The word for output `index` sits at its head offset; word 0 gets its alias. */
+function decoderCall(fn: { outputs: readonly string[] }, index: number): string {
+  const offset = outputHeadOffsets(fn.outputs)[index] ?? 0;
+  if (offset !== 0) return `word(${offset})`;
+  const type = canonicalWordType(fn.outputs[index]) ?? 'uint256';
+  return type === 'bool' ? 'bool()' : /^bytes\d+$/.test(type) ? 'bytes32()' : 'uint256()';
+}
+
+function decodeKey(callId: string, index: number): string {
+  return `out:${callId}:${index}`;
+}
+
+/** Expression text for whatever feeds an input port; pure nodes inline. */
 function exprOf(ctx: Context, nodeId: string, port: string): string {
   const source = ctx.feed.get(`${nodeId}:${port}`);
   if (!source) throw new GraphError([{ node: nodeId, port, message: `Input port "${port}" has no source` }]);
   return exprOfSource(ctx, source);
 }
 
-/** Source keys are `${nodeId}:${port}` where ports never contain ':'. */
-function exprOfSource(ctx: Context, sourceKey: string): string {
-  const nodeId = sourceKey.slice(0, sourceKey.lastIndexOf(':'));
-  const node = ctx.byId.get(nodeId);
-  if (!node) throw new GraphError([{ node: nodeId, message: `Missing node "${nodeId}"` }]);
+function exprOfSource(ctx: Context, source: GraphEndpoint): string {
+  const node = ctx.byId.get(source.node);
+  if (!node) throw new GraphError([{ node: source.node, message: `Missing node "${source.node}"` }]);
   switch (node.kind) {
     case 'context':
       return node.name;
@@ -156,15 +168,16 @@ function exprOfSource(ctx: Context, sourceKey: string): string {
       const rhs = exprOf(ctx, node.id, 'rhs');
       return `(${lhs}).${node.op}(${rhs})`;
     }
-    case 'return': {
-      const name = ctx.names.get(`ret:${nodeId}`);
+    case 'call': {
+      const index = /^out:(\d+)$/.exec(source.port)?.[1];
+      const name = index === undefined ? undefined : ctx.names.get(decodeKey(node.id, Number(index)));
       if (!name) {
-        throw new GraphError([{ node: nodeId, message: 'Decoder was never emitted before use' }]);
+        throw new GraphError([{ node: node.id, port: source.port, message: 'Call output was never decoded at its call site' }]);
       }
       return name;
     }
     default:
-      throw new GraphError([{ node: nodeId, message: `Node "${nodeId}" cannot produce a value` }]);
+      throw new GraphError([{ node: node.id, message: `Node "${node.id}" cannot produce a value` }]);
   }
 }
 
@@ -172,14 +185,6 @@ function literalText(node: Extract<GraphNode, { kind: 'literal' }>): string {
   if (node.literalType === 'address') return `"${node.literal.toLowerCase()}"`;
   if (node.literalType === 'bool') return node.literal;
   return `${BigInt(node.literal).toString(10)}n`;
-}
-
-function decoderCall(node: ReturnNode): string {
-  return node.decoder === 'word' ? `word(${node.offset ?? 0})` : `${node.decoder}()`;
-}
-
-function decoderTag(node: ReturnNode): string {
-  return node.decoder === 'word' ? `w${(node.offset ?? 0) / 32}` : node.decoder;
 }
 
 function contractKey(contract: ContractResource): string {

@@ -33,7 +33,6 @@ describe('validateProject', () => {
       nodes: [
         { id: 'self', kind: 'context', name: 'SELF' },
         { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
-        { id: 'amt', kind: 'return', decoder: 'uint256' },
         { id: 'lit', kind: 'literal', literalType: 'uint', literal: '1000' },
         { id: 'cmp', kind: 'binary', op: 'gt' },
         { id: 'if1', kind: 'if' },
@@ -41,11 +40,10 @@ describe('validateProject', () => {
       ],
       edges: [
         edge('self', 'out', 'call1', 'arg:0'),
-        edge('call1', 'result', 'amt', 'result'),
-        edge('amt', 'out', 'cmp', 'lhs'),
+        edge('call1', 'out:0', 'cmp', 'lhs'),
         edge('lit', 'out', 'cmp', 'rhs'),
         edge('cmp', 'out', 'if1', 'condition'),
-        edge('amt', 'out', 'dep', 'arg:0'),
+        edge('call1', 'out:0', 'dep', 'arg:0'),
       ],
     });
     expect(validateProject(p)).toEqual([]);
@@ -63,16 +61,16 @@ describe('validateProject', () => {
     expect(messages(p).join()).toContain('not a valid uint');
   });
 
-  it('rejects a word offset that is not a word multiple', () => {
-    const p = project({ nodes: [{ id: 'r', kind: 'return', decoder: 'word', offset: 16 }] });
-    expect(messages(p).join()).toContain('multiple of 32');
-  });
-
-  it('rejects negative, fractional, and unsafe word offsets', () => {
-    for (const offset of [-32, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
-      const p = project({ nodes: [{ id: 'r', kind: 'return', decoder: 'word', offset }] });
-      expect(messages(p).join()).toContain('non-negative multiple of 32');
-    }
+  it('rejects edges from output indices the ABI does not have', () => {
+    const p = project({
+      nodes: [
+        { id: 'call', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
+        { id: 'lit', kind: 'literal', literalType: 'uint', literal: '1' },
+      ],
+      edges: [edge('call', 'out:1', 'lit', 'out')],
+    });
+    // balanceOf has one output; and a literal has no input ports at all.
+    expect(messages(p).join()).toContain('no longer exists');
   });
 
   it('routes booleans into bool slots only', () => {
@@ -120,8 +118,8 @@ describe('validateProject', () => {
       ],
       edges: [edge('call', 'result', 'lit', 'out')],
     });
-    // result outputs only feed decoders; also lit has no such input port
-    expect(messages(rawToValue).join()).toContain('Input port "out" no longer exists');
+    // The raw result port is gone; old graphs migrate it on load.
+    expect(messages(rawToValue).join()).toContain('Output port "result" no longer exists');
   });
 
   it('rejects multiple drivers and missing required inputs', () => {
@@ -185,10 +183,10 @@ describe('validateProject', () => {
     expect(validateProject(inward)).toEqual([]);
   });
 
-  it('allows a decoder at or below its call\'s block but not above it', () => {
-    // The builder decodes return data in the call's scope or any nested block,
-    // so a decoder inside a nested IF below the call is valid.
-    const nestedDecoder = project({
+  it('allows a call output consumed at or below its block, not above it', () => {
+    // The decode sits at the call site, so a consumer in a nested block
+    // below the call reads a constant that is in scope.
+    const nestedConsumer = project({
       nodes: [
         { id: 'self', kind: 'context', name: 'SELF' },
         { id: 'if1', kind: 'if' },
@@ -196,33 +194,61 @@ describe('validateProject', () => {
         { id: 'call', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1' },
         { id: 'if2', kind: 'if', parent: 'if1' },
         { id: 'cond2', kind: 'context', name: 'GAS' },
-        { id: 'ret', kind: 'return', decoder: 'uint256', parent: 'if2' },
+        { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if2' },
       ],
       edges: [
         edge('self', 'out', 'call', 'arg:0'),
         edge('cond1', 'out', 'if1', 'condition'),
         edge('cond2', 'out', 'if2', 'condition'),
-        edge('call', 'result', 'ret', 'result'),
+        edge('call', 'out:0', 'dep', 'arg:0'),
       ],
     });
-    expect(validateProject(nestedDecoder)).toEqual([]);
+    expect(validateProject(nestedConsumer)).toEqual([]);
 
-    // Decoding ABOVE the call would read return data that no longer exists.
-    const shallowerDecoder = project({
+    // Consuming ABOVE the call would read a constant that never existed
+    // at that scope (and return data is stale outside the call's block).
+    const shallowerConsumer = project({
       nodes: [
         { id: 'self', kind: 'context', name: 'SELF' },
         { id: 'if1', kind: 'if' },
         { id: 'cond1', kind: 'context', name: 'GAS' },
         { id: 'call', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1' },
-        { id: 'ret', kind: 'return', decoder: 'uint256' },
+        { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
       ],
       edges: [
         edge('self', 'out', 'call', 'arg:0'),
         edge('cond1', 'out', 'if1', 'condition'),
-        edge('call', 'result', 'ret', 'result'),
+        edge('call', 'out:0', 'dep', 'arg:0'),
       ],
     });
-    expect(messages(shallowerDecoder).join()).toContain('cannot be used outside');
+    expect(messages(shallowerConsumer).join()).toContain('cannot be used outside');
+  });
+
+  it('marks dynamic outputs non-connectable but keeps the function usable', () => {
+    const contracts = [{ id: 'c1', name: 'Meta', address: ADDRESS, functions: [
+      { signature: 'meta()', name: 'meta', inputs: [], outputs: ['string', 'uint256'], mutability: 'view' as const },
+      { signature: 'deposit(uint256)', name: 'deposit', inputs: ['uint256'], outputs: [], mutability: 'nonpayable' as const },
+    ] }];
+    const throughDynamic = project({
+      contracts,
+      nodes: [
+        { id: 'call', kind: 'call', contractId: 'c1', signature: 'meta()' },
+        { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+      ],
+      edges: [edge('call', 'out:0', 'dep', 'arg:0')],
+    });
+    expect(messages(throughDynamic).join()).toContain('not decodable');
+
+    const afterDynamic = project({
+      contracts,
+      nodes: [
+        { id: 'call', kind: 'call', contractId: 'c1', signature: 'meta()' },
+        { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+      ],
+      edges: [edge('call', 'out:1', 'dep', 'arg:0')],
+    });
+    // The uint after a dynamic predecessor sits at head word 1 and decodes fine.
+    expect(validateProject(afterDynamic)).toEqual([]);
   });
 
   it('reports dangling parent and parent cycles', () => {
@@ -255,11 +281,11 @@ describe('stableOrder', () => {
         { id: 'callA', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
         { id: 'callB', kind: 'call', contractId: 'c1', signature: 'stake()' },
         { id: 'src', kind: 'context', name: 'SELF' },
-        { id: 'ret', kind: 'return', decoder: 'uint256' },
+        { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
       ],
-      edges: [edge('callA', 'result', 'ret', 'result'), edge('src', 'out', 'callA', 'arg:0')],
+      edges: [edge('callA', 'out:0', 'dep', 'arg:0'), edge('src', 'out', 'callA', 'arg:0')],
     });
-    expect(stableOrder(p).order).toEqual(['callB', 'src', 'callA', 'ret']);
+    expect(stableOrder(p).order).toEqual(['callB', 'src', 'callA', 'dep']);
     expect(stableOrder(p).cycle).toEqual([]);
   });
 
@@ -269,27 +295,24 @@ describe('stableOrder', () => {
       { id: 'cond', kind: 'context', name: 'GAS' },
       { id: 'self1', kind: 'context', name: 'SELF' },
       { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
-      { id: 'ret1', kind: 'return', decoder: 'uint256' },
       { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if1' },
     ];
     const edges = [
       edge('cond', 'out', 'if1', 'condition'),
       edge('self1', 'out', 'call1', 'arg:0'),
-      edge('call1', 'result', 'ret1', 'result'),
-      edge('ret1', 'out', 'dep', 'arg:0'),
+      edge('call1', 'out:0', 'dep', 'arg:0'),
     ];
     const ifFirst = project({ nodes, edges });
     expect(validateProject(ifFirst)).toEqual([]);
     const { order, cycle } = stableOrder(ifFirst);
     expect(cycle).toEqual([]);
-    expect(order.indexOf('ret1')).toBeLessThan(order.indexOf('if1'));
     expect(order.indexOf('call1')).toBeLessThan(order.indexOf('if1'));
 
     // reversing the array must not change the semantic order of the relevant pair
     const reversed = project({ nodes: [...nodes].reverse(), edges });
     const rev = stableOrder(reversed);
     expect(rev.cycle).toEqual([]);
-    expect(rev.order.indexOf('ret1')).toBeLessThan(rev.order.indexOf('if1'));
+    expect(rev.order.indexOf('call1')).toBeLessThan(rev.order.indexOf('if1'));
   });
 
   it('lists remaining nodes as the cycle', () => {
