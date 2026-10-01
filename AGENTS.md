@@ -1,440 +1,463 @@
-# AGENTS.md — LISA IDE v2
+# AGENTS.md — LISA IDE v2 Refinement
 
 ## Goal
 
-LISA IDE v2 adds a **minimal visual coding mode** for building LISA programs without writing source by hand.
+Polish the existing visual-coding implementation so it feels simple, readable, and self-explanatory.
 
-The visual editor should model useful LISA concepts — contracts, calls, values, return data, comparisons, and conditions — rather than exposing VM instructions directly.
+Do not redesign the project architecture. Keep the current semantic graph + React Flow projection + `@bosorus/lisa-evm` lowering model.
 
-A visual program must compile through the existing `@bosorus/lisa-evm` / `lisa-tooling` APIs into the **same LISA bytecode and artifact format** already produced by code mode.
+The main goals are:
 
-Keep the application small. V2 is a visual authoring layer, not a general-purpose node IDE.
+- automatic ABI-aware outputs on call nodes
+- larger, readable node cards
+- direct editing of simple values/logic on canvas
+- a bounded and collapsible right-side library
+- compact contract browsing
+- a stable canvas that does not grow with sidebar/output content
 
-Long term, LISA IDE should remain usable standalone and may later connect a wallet for simulation/execution. Do not couple the v2 graph/project model to a wallet or execution provider.
+The visual editor should feel like:
 
----
+**contracts + values + logic + control flow**
 
-## Stack
-
-Keep the existing stack:
-
-- Vite
-- React
-- TypeScript
-- MUI
-- CodeMirror 6
-- Vitest + React Testing Library
-- `@bosorus/lisa-evm`
-- existing Web Worker compilation boundary
-
-Add:
-
-- `@xyflow/react` for the visual canvas and node interaction
-
-Do not add another graph framework, global state library, router, backend, TypeScript language server, or wallet stack for v2 unless a concrete need appears.
+not VM plumbing.
 
 ---
 
-## Product Model
+## 1. Automatic ABI decoding
 
-V2 has two explicit authoring modes:
+Remove explicit decode nodes from the normal visual authoring flow where the ABI already defines return values.
 
-- **Code**
-- **Visual**
+A call node should expose usable output ports directly from the function ABI.
 
-They are separate authoring models.
+Example:
 
-Do **not** attempt arbitrary code → visual graph conversion.
+```solidity
+function balanceOf(address owner) view returns (uint256 balance)
+```
 
-A visual project may generate readable LISA source for inspection/export. If users later edit that generated source freely, it should be treated as a code project rather than kept bidirectionally synchronized with the graph.
-
-Both modes converge at the existing compilation/artifact boundary:
+should render conceptually as:
 
 ```text
-Code source ────────────────┐
-                            ├─> lisa-tooling -> bytecode -> artifact
-Visual graph -> lowering ───┘
+┌ USDC · balanceOf ──────────────┐
+│ owner   address  ○             │
+│                                │
+│              balance uint256 ○ │
+└────────────────────────────────┘
 ```
 
----
+The graph lowering layer should internally perform the appropriate `CallResult` decoding only when an output is used.
 
-## Visual Design
+For v2, support visually decodable static word-sized outputs that map cleanly to current LISA tooling, including:
 
-Prefer a simple layout:
+- `uintN`
+- `address`
+- `bool`
+- `bytesN`
 
-```text
-┌────────────────────────────────────────────────────────┐
-│ LISA IDE                              Code | Visual     │
-├───────────────────────────────┬────────────────────────┤
-│                               │ Contracts / Nodes      │
-│         Visual canvas         │                        │
-│                               │ USDC                   │
-│                               │   balanceOf            │
-│                               │   approve              │
-│                               │                        │
-│                               │ Values / Logic         │
-├───────────────────────────────┴────────────────────────┤
-│ Generated source | Bytecode | Disassembly             │
-└────────────────────────────────────────────────────────┘
-```
+Do not add dynamic ABI decoding for:
 
-Keep the interface visually consistent with v1.
+- `string`
+- dynamic `bytes`
+- arrays
+- tuples
+- other dynamic structures
 
-The dominant mental model should be:
+If a function has unsupported return values, show them in the node as unsupported/non-connectable rather than introducing raw-result plumbing into the normal UI.
 
-**contracts + values + control flow**
+Preserve ABI parameter/output names when parsing ABI. Use names in node labels and port labels whenever available. Fall back to type + position only when names are absent.
 
-not opcodes or graphical assembly.
+The explicit Decode/Return node type may remain internally during migration if useful, but it should no longer be part of the normal palette once direct ABI outputs work.
 
 ---
 
-## Contract Resources
+## 2. Node visual redesign
 
-Contract instances are first-class project resources.
+Current nodes are too small and port labels overlap.
 
-A contract should be added once using:
+Redesign nodes as small readable cards.
 
-- name
-- address
-- ABI
+Call nodes should generally be around 220–260px wide and grow vertically based on their inputs/outputs.
 
-Example conceptual model:
-
-```ts
-interface ContractResource {
-  id: string;
-  name: string;
-  address: string;
-  abi: readonly string[];
-}
-```
-
-The UI should parse the ABI and list callable functions under that contract.
-
-Prefer grouping functions into simple read/write sections when useful.
-
-Users should be able to drag a function from the contract panel onto the visual canvas. The resulting node references the contract resource and function signature instead of copying ABI data into every node.
-
-Changing a contract address should update all nodes referencing that resource.
-
-For v2, support:
-
-- paste ABI JSON
-- address
-- friendly contract name
-
-Do not add explorer ABI fetching or Intereth integration yet.
-
----
-
-## Semantic Graph
-
-React Flow is only the rendering/interaction layer.
-
-Do **not** use React Flow's node/edge structures as the canonical program semantics.
-
-Define a small internal semantic graph model that can be tested independently of React.
-
-Start with the smallest useful node vocabulary:
-
-```ts
-type LisaGraphNode =
-  | ContractCallNode
-  | ContextValueNode
-  | LiteralNode
-  | BinaryOperationNode
-  | ReturnValueNode
-  | IfNode;
-```
-
-Exact types may evolve, but keep the concepts small and explicit.
-
-Likely context values:
-
-- `SELF`
-- `CALLER`
-- `GAS`
-- `TIMESTAMP`
-- `SELFBALANCE`
-
-Likely operations:
-
-- add
-- sub
-- mul
-- div
-- lt
-- gt
-- eq
-
-Do not create one node type per VM opcode.
-
-Keep a low-level/raw call escape hatch only if clearly needed.
-
----
-
-## Typed Connections
-
-Use lightweight semantic port types to prevent obviously invalid connections.
-
-Keep this intentionally small, for example:
-
-- value
-- address
-- calldata
-- condition
-- call result
-
-Do not implement a Solidity type system.
-
-ABI-aware call nodes may expose argument ports using their ABI types, but graph compatibility rules should remain simple.
-
----
-
-## Calls and Return Data
-
-Dragging a contract function should create a semantic call node.
-
-- view/pure functions should normally lower to `staticCall`
-- state-changing/payable functions should normally lower to `call`
-
-Call nodes should expose:
-
-- contract/function identity
-- ABI inputs
-- native value when relevant
-- return value outputs when supported
-
-Return data should lower through the existing `lisa-tooling` helpers such as `uint256()`, `word()`, `bool()`, etc.
-
-Do not reimplement ABI encoding or returndata semantics in the IDE.
-
----
-
-## Control Flow
-
-For v2, support the current simple LISA conditional model.
-
-Prefer a compact **IF container/block** rather than generic branching wires:
-
-```text
-[ balanceOf ]
-      │
-      ▼
-[ > 1000 ]
-      │
-      ▼
-┌ IF TRUE ──────────────┐
-│ [ Vault.deposit ]     │
-└───────────────────────┘
-```
-
-This should lower naturally to `p.if(...)`.
-
-Do not add loops, else branches, reusable functions, or general control-flow graphs in v2 unless required by the current LISA API.
-
----
-
-## Data Flow and Ordering
-
-Prefer data-flow relationships over explicit execution wires when dependencies already imply order.
+Use row-based layouts rather than mathematically distributing absolute port labels over the node height.
 
 Example:
 
 ```text
-USDC.balanceOf -> amount -> comparison -> Vault.deposit
+┌────────────────────────────┐
+│ USDC                       │
+│ balanceOf                  │
+├────────────────────────────┤
+○ owner              address │
+├────────────────────────────┤
+│ uint256             balance ○
+└────────────────────────────┘
 ```
 
-The graph-to-program lowering step is responsible for producing a valid deterministic execution order.
+Guidelines:
 
-Reject:
+- input handles align with input rows
+- output handles align with output rows
+- contract name and function name are visually distinct
+- long labels truncate gracefully and expose the full text via tooltip/title
+- node content must not overlap handles or neighboring labels
+- node size should be driven by content rather than a tiny global minimum
+- keep styling compact, dark, and consistent with v1
 
-- cycles
-- missing required inputs
-- references to missing contract resources
-- ambiguous or impossible ordering
-- invalid port connections
-
-Errors should be understandable at graph level, not exposed as internal compiler failures when they can be caught earlier.
+Simple nodes may stay smaller than call nodes.
 
 ---
 
-## Graph Lowering
+## 3. Direct editing on canvas
 
-Create a pure visual compiler/lowering layer:
+Basic semantic nodes should be editable directly in the canvas.
+
+Users should not need to discover the sidebar inspector for common edits.
+
+Preferred behavior:
+
+### Literal
+
+Render type + editable value directly:
+
+```text
+┌ Literal ──────────────┐
+│ uint256  [ 1000 ]    ○
+└───────────────────────┘
+```
+
+Support the existing literal types:
+
+- uint
+- address
+- bool
+
+Keep validation behavior consistent with the semantic model. Invalid intermediate text may live locally in the component, but invalid values must not enter persisted project state.
+
+### Operation
+
+Render the operator directly as a select/control in the node.
+
+Example:
+
+```text
+┌ Operation ────────────┐
+○ left                  │
+○ right          [  > ] ○
+└───────────────────────┘
+```
+
+### Context
+
+Render the current context source directly and allow changing it from the node:
+
+- SELF
+- CALLER
+- GAS
+- TIMESTAMP
+- SELFBALANCE
+
+### IF
+
+Keep IF visually distinct but simple. Do not turn it into a general control-flow editor.
+
+### Call
+
+Call arguments should primarily remain connection ports.
+
+For payable functions, make the native value input obvious.
+
+The existing selected-node inspector may remain for secondary details and diagnostics, but basic authoring must not depend on it.
+
+---
+
+## 4. Stable visual workspace
+
+The canvas must not grow vertically because the contract list, node palette, inspector, or output becomes large.
+
+Use a bounded desktop workspace based on available viewport height.
+
+Conceptually:
+
+```text
+Top bar
+────────────────────────────────────────
+Canvas                     Library
+                           (scrolls)
+────────────────────────────────────────
+Output panel
+```
+
+Requirements:
+
+- canvas height stays stable
+- sidebar scrolls independently
+- output content scrolls independently
+- adding large contracts does not increase canvas/page height
+- large projects remain usable without the whole page becoming one long document
+
+Avoid hardcoding dimensions that only work on one screen size.
+
+---
+
+## 5. Right-side library
+
+Replace the current long `Contracts / Nodes` document with a bounded library panel.
+
+Recommended structure:
+
+```text
+Library
+[ Contracts ] [ Nodes ]
+
++ Add contract
+
+▸ USDC
+  12 functions
+
+▾ Vault
+  Search functions...
+  Read
+    previewDeposit
+  Write
+    deposit
+
+Values / Logic
+  Literal
+  Context
+  Operation
+  IF
+```
+
+The whole library panel should be collapsible so users can maximize canvas space.
+
+On smaller screens, prefer a drawer/overlay or stacked layout rather than squeezing the canvas excessively.
+
+Do not let sidebar content determine canvas dimensions.
+
+---
+
+## 6. Contract management
+
+Do not show the full add-contract form permanently.
+
+Use a compact `+ Add contract` action that opens a dialog or similarly contained form.
+
+Contract creation still requires:
+
+- friendly name
+- address
+- pasted ABI JSON
+
+Once created, a contract should render compactly:
+
+```text
+▸ USDC    0xA0b8…eB48    14 funcs
+```
+
+Expanding the contract shows its functions.
+
+Requirements:
+
+- contract rows start collapsed
+- support function search/filtering
+- keep read/write grouping if useful, but subtle
+- avoid rendering every function for every contract at once
+- contract address editing/removal may live inside the expanded contract or a compact secondary action
+
+Clicking a function should add it to the canvas as well as drag-and-drop.
+
+Drag-and-drop remains supported.
+
+Click-to-add should place the node at a sensible visible canvas position.
+
+This also improves touch usability.
+
+---
+
+## 7. Node palette
+
+Keep the palette intentionally small.
+
+Normal v2 palette:
+
+- Literal
+- Context
+- Operation
+- IF
+
+Contract calls come from contract resources.
+
+Remove Decode from the normal palette once automatic ABI outputs are implemented.
+
+Do not add one node per opcode.
+
+Do not expose VM-level operations unless there is a concrete user-facing need.
+
+---
+
+## 8. Semantic model and lowering
+
+Preserve the core architecture:
 
 ```text
 Visual project
     ↓
-validate graph
+semantic validation
     ↓
-determine deterministic order
+deterministic lowering
     ↓
-build with lisa-tooling
+@bosorus/lisa-evm / lisa-tooling
     ↓
-existing compile / artifact pipeline
+generated source
+    ↓
+existing compiler Worker
+    ↓
+bytecode / artifact
 ```
 
-This layer must be independent of React Flow and should have strong unit tests.
+React Flow must remain presentation only.
 
-Do not emit raw LISA bytecode manually.
+Do not move semantics into React Flow node data.
 
-Do not duplicate ISA logic.
+Do not emit raw bytecode manually.
 
-Use `@bosorus/lisa-evm` as the only source of LISA execution/compiler semantics.
+Do not duplicate LISA ABI/compiler semantics.
 
----
+If call outputs are moved directly onto call nodes, update:
 
-## Generated Source
+- semantic graph model
+- ABI parsing
+- port generation
+- validation
+- deterministic lowering
+- generated source
+- persistence migration/parsing
+- tests
 
-Visual projects should expose **read-only generated source**.
-
-The generated source should be reasonably human-readable and resemble normal v1 authoring code:
-
-```ts
-const p = createProgram();
-
-const balance = p
-  .staticCall(TOKEN, encodeCall("balanceOf(address)", [SELF]))
-  .uint256();
-
-p.if(balance.gt(1000n), () => {
-  p.call(VAULT, encodeCall("deposit(uint256)", [balance]));
-});
-
-return p;
-```
-
-Generated source is primarily for:
-
-- transparency
-- learning
-- debugging
-- exporting a visual project into code mode later
-
-Do not make generated source editable while preserving visual synchronization.
-
-The graph and generated source must compile to equivalent program bytes.
+Keep those changes explicit and small.
 
 ---
 
-## Project Persistence
+## 9. Output panel
 
-Extend browser persistence carefully so a visual project can store:
+The Output area should no longer consume an unbounded second page section.
 
-- authoring mode
-- contract resources
-- semantic graph
-- small UI metadata needed to restore node positions
+Prefer a bounded/collapsible bottom panel.
 
-Keep semantic graph data separate from React Flow presentation metadata where practical.
-
-Persist only serializable project state.
-
-Do not persist compiler output as authoritative state; it can be regenerated.
-
-Use localStorage unless size or real usage demonstrates a need for IndexedDB.
-
----
-
-## Existing Compiler and Artifact Architecture
-
-Preserve the v1 principles:
-
-- `@bosorus/lisa-evm` is the compiler/ISA source of truth
-- compilation/inspection stays behind the Worker boundary where applicable
-- `lisa-program` remains the portable compiled artifact
-- program bytes and independently checked hash remain execution-critical
-- metadata remains descriptive
-
-Visual mode must produce the same artifact format as code mode.
-
-Do not introduce a separate "visual artifact" for execution.
-
-A visual-project export may be added separately later if useful for editing/sharing projects.
-
----
-
-## Future Standalone Execution
-
-Do not implement wallet execution in this v2 branch.
-
-However, keep project authoring independent from execution context so a later version can cleanly add:
+Collapsed state may show a concise status such as:
 
 ```text
-Author -> Compile -> Inspect
-                     ↓
-                Connect wallet
-                     ↓
-              Simulate / Execute
+> Output   ✓ compiled · 214 bytes
 ```
 
-The graph must not depend on:
+Expanded state contains the existing:
 
-- connected account
-- provider
-- chain state
-- LisaAccount deployment
-- wallet permissions
+- Bytecode
+- Disassembly
+- Generated source
+- program hash
+- artifact actions
 
-Those belong to a future execution layer.
-
----
-
-## Suggested Implementation Order
-
-1. Add `@xyflow/react` and a minimal Visual mode shell.
-2. Define visual project, contract resource, semantic graph, node, port, and edge types.
-3. Add contract-resource creation from name + address + ABI.
-4. Render contract functions in a simple sidebar and support dragging them onto the canvas.
-5. Add literal/context nodes and lightweight typed connections.
-6. Implement pure graph validation and deterministic lowering through `lisa-tooling`.
-7. Add return-value and arithmetic/comparison nodes.
-8. Add the IF container/block.
-9. Add read-only generated source.
-10. Feed visual compilation into the existing bytecode/disassembly/artifact UI.
-11. Persist visual projects locally.
-12. Add focused tests and browser polish.
-
-Prefer incremental working slices over building the entire node system first.
+Do not change artifact semantics.
 
 ---
 
-## Testing
+## 10. UX principles
 
-Pure semantic behavior should be tested without React Flow.
+Prefer obvious interactions over hidden ones.
 
-Prioritize tests for:
+A user should be able to understand the core workflow without documentation:
 
-- ABI -> contract function resources
+1. Add contract
+2. Add/drag function
+3. Add literal/context values
+4. Connect ports
+5. Adjust values/operators directly
+6. Compile
+
+Use tooltips for truncated or technical details, not for essential controls.
+
+Keep terminology ABI/LISA-friendly but avoid exposing VM internals unnecessarily.
+
+Make invalid graph states understandable at graph level.
+
+---
+
+## 11. Non-goals
+
+Do not add in this refinement:
+
+- wallet connection
+- simulation
+- execution
+- Intereth integration
+- explorer ABI fetching
+- arbitrary code → graph conversion
+- loops
+- reusable modules/functions
+- dynamic ABI return decoding
+- Solidity type system
+- generalized raw-return programming
+- a generic IDE/plugin architecture
+
+Keep focus on polishing the current v2 visual workflow.
+
+---
+
+## 12. Suggested implementation order
+
+1. Extend ABI metadata to preserve input/output names.
+2. Move static decodable outputs directly onto call nodes.
+3. Update validation/lowering/generated source and tests.
+4. Remove Decode from normal palette.
+5. Redesign node cards and port row layout.
+6. Add inline editing for literals, operations, and context nodes.
+7. Replace permanent contract form with Add Contract dialog.
+8. Make contract rows collapsed/searchable.
+9. Add click-to-add for functions.
+10. Make library collapsible and independently scrollable.
+11. Bound the visual workspace/canvas height.
+12. Make Output collapsible/bounded.
+13. Do responsive/browser polish.
+
+Prefer completing each vertical slice with tests before moving to the next.
+
+---
+
+## 13. Testing
+
+Prioritize pure logic tests for:
+
+- ABI input/output names
+- output type support
+- automatic call output ports
+- unsupported dynamic outputs
 - graph validation
-- port compatibility
-- dependency ordering
-- cycle rejection
-- missing-input rejection
-- contract resource references
-- graph -> lisa-tooling lowering
+- lowering used return values
+- multiple call outputs
 - generated source
-- equivalence between generated visual programs and expected compiled bytes
-- persistence parsing / invalid saved state recovery
+- persisted project migration/parsing
 
-UI tests should cover only important interactions:
+UI tests should cover:
 
-- add a contract
-- drag/create a function node
-- connect values
-- delete/move nodes
-- switch authoring modes
-- compile visual graph
-- see graph-level errors
+- add contract dialog
+- collapsed/expanded contracts
+- function filtering
+- click-to-add
+- drag-to-add
+- inline literal editing
+- inline operation/context editing
+- automatic call output rendering
+- sidebar collapse
+- output collapse
 
-Avoid brittle tests of canvas pixel positions or implementation details of React Flow.
+Avoid brittle pixel-level React Flow tests.
 
 ---
 
-## Required Local Checks
+## 14. Required local checks
 
-Before considering changes complete:
+Run:
 
 ```sh
 npm install
@@ -443,41 +466,22 @@ npm run typecheck
 npm run build
 ```
 
-Also run `npm run dev` and verify in a real browser:
+Then verify with `npm run dev` in a real browser:
 
-1. Existing code mode still works unchanged.
-2. Visual mode opens without affecting current source projects.
-3. Contract ABI/address entry validates clearly.
-4. Functions can be dragged/added and connected reliably.
-5. Invalid connections are prevented or explained.
-6. Moving nodes does not change program semantics.
-7. Reload restores the visual project.
-8. Generated source is readable and stable.
-9. Visual compile produces expected bytecode/disassembly/artifact.
-10. The canvas remains usable on a typical laptop viewport and degrades reasonably on smaller widths.
+1. Existing code mode is unaffected.
+2. Call nodes are readable with several inputs and outputs.
+3. No port labels overlap.
+4. ABI outputs connect directly without manual Decode nodes.
+5. Unsupported dynamic returns are clearly non-connectable.
+6. Literals/operators/context values can be edited directly on canvas.
+7. Several large ABIs do not enlarge the canvas/page.
+8. Contracts start compact and their function lists are searchable.
+9. Sidebar collapse meaningfully increases canvas space.
+10. Function click-to-add and drag-to-add both work.
+11. Output panel does not destabilize canvas layout.
+12. Reload preserves semantic graph and presentation state.
+13. Generated source and compiled bytes remain deterministic.
 
-For behaviors that jsdom cannot verify meaningfully, test underlying pure logic and perform the browser check rather than adding brittle mocks.
+The success criterion for this refinement is:
 
----
-
-## Non-goals for v2
-
-Do not add:
-
-- wallet connection
-- on-chain simulation
-- transaction execution
-- Intereth integration
-- explorer ABI fetching
-- arbitrary code -> graph conversion
-- editable synchronized generated source
-- loops
-- reusable user functions/modules
-- package imports
-- a Solidity type system
-- custom VM/ISA compilation logic
-- a general graphical programming platform
-
-The v2 success criterion is simple:
-
-**A user can add contracts, visually compose a useful LISA program from calls, values, return data, comparisons, and conditions, then compile/export exactly the same kind of LISA artifact as code mode.**
+**The same v2 feature set should feel substantially simpler: users work directly with contract calls, decoded ABI outputs, values, logic, and IF blocks without manually managing decoding or fighting the layout.**
