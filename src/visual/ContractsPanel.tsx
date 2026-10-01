@@ -180,8 +180,15 @@ function FunctionGroup({ label, functions, contractId, onAddFunction }: {
         onClick={() => onAddFunction(contractId, fn.signature)}
         title={`Click to add to the canvas, or drag onto it: ${fn.signature}`}
         role="button"
+        aria-label={fn.signature}
       >
-        {fn.name}
+        {/* Canonical signature, not the bare name: overloads must not look
+            identical. Truncated on screen; full text in the tooltip. */}
+        <Box component="span" sx={{
+          display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {fn.signature}
+        </Box>
       </Paper>
     ))}
   </Box>;

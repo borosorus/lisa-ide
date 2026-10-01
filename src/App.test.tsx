@@ -38,6 +38,13 @@ vi.mock('./editor/SourceEditor', () => ({
 vi.mock('./visual/VisualCanvas', () => ({
   VisualCanvas: (props: Record<string, any>) => <>
     <div aria-label="Visual canvas" />
+    {/* Context cards inline-edit their value; the test drives that control. */}
+    {props.project.nodes.filter((n: { kind: string }) => n.kind === 'context').map((n: { id: string; name: string }) =>
+      <select key={n.id} aria-label="Context value" value={n.name}
+        onChange={e => props.onPatchNode(n.id, { name: e.target.value })}>
+        <option value="SELF">SELF</option>
+        <option value="CALLER">CALLER</option>
+      </select>)}
     <button
       aria-label="simulate-drop"
       onClick={() => props.onAddCallNode(props.project.contracts[0]?.id ?? 'missing', 'balanceOf(address)', { x: 10, y: 20 })}
@@ -199,14 +206,26 @@ describe('App', () => {
       { type: 'function', name: 'transfer', stateMutability: 'nonpayable', inputs: [{ type: 'address' }, { type: 'uint256' }], outputs: [{ type: 'bool' }] },
     ]);
     await addContract('USDC', abi);
-    // Collapsed: functions are not rendered until the row expands.
-    expect(screen.queryByText('balanceOf')).not.toBeInTheDocument();
+    // Rows carry the canonical signature, so overloads read differently.
+    expect(screen.queryByText('balanceOf(address)')).not.toBeInTheDocument();
     await expandContract('USDC');
-    expect(await screen.findByText('balanceOf')).toBeInTheDocument();
-    expect(screen.getByText('transfer')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Search functions in USDC'), { target: { value: 'trans' } });
-    expect(screen.queryByText('balanceOf')).not.toBeInTheDocument();
-    expect(screen.getByText('transfer')).toBeInTheDocument();
+    expect(await screen.findByText('balanceOf(address)')).toBeInTheDocument();
+    expect(screen.getByText('transfer(address,uint256)')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Search functions in USDC'), { target: { value: 'uint256)' } });
+    expect(screen.queryByText('balanceOf(address)')).not.toBeInTheDocument();
+    expect(screen.getByText('transfer(address,uint256)')).toBeInTheDocument();
+  });
+
+  it('shows overloads as distinct rows', async () => {
+    render(<App />);
+    toVisual();
+    await addContract('Vault', JSON.stringify([
+      { type: 'function', name: 'transfer', stateMutability: 'nonpayable', inputs: [{ type: 'address' }], outputs: [] },
+      { type: 'function', name: 'transfer', stateMutability: 'nonpayable', inputs: [{ type: 'address' }, { type: 'uint256' }], outputs: [{ type: 'bool' }] },
+    ]));
+    await expandContract('Vault');
+    expect(await screen.findByRole('button', { name: 'transfer(address)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'transfer(address,uint256)' })).toBeInTheDocument();
   });
 
   it('adds a call node by clicking a function in the library', async () => {
@@ -214,7 +233,7 @@ describe('App', () => {
     toVisual();
     await addContract();
     await expandContract('USDC');
-    fireEvent.click(screen.getByRole('button', { name: 'balanceOf' }));
+    fireEvent.click(screen.getByRole('button', { name: 'balanceOf(address)' }));
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       expect(saved.visual.nodes).toEqual([
@@ -229,7 +248,7 @@ describe('App', () => {
     await addContract();
     await expandContract('USDC');
     for (let i = 1; i <= 3; i++) {
-      fireEvent.click(screen.getByRole('button', { name: 'balanceOf' }));
+      fireEvent.click(screen.getByRole('button', { name: 'balanceOf(address)' }));
       await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.nodes).toHaveLength(i));
     }
     const positions = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.positions;
@@ -269,8 +288,7 @@ describe('App', () => {
       expect(saved.visual.nodes).toEqual([{ id: 'ctx1', kind: 'context', name: 'SELF' }]);
     });
     fireEvent.click(screen.getByRole('button', { name: 'simulate-select-first' }));
-    fireEvent.mouseDown(screen.getByRole('combobox'));
-    fireEvent.click(await screen.findByRole('option', { name: 'CALLER' }));
+    fireEvent.change(screen.getByLabelText('Context value'), { target: { value: 'CALLER' } });
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       expect(saved.visual.nodes[0].name).toBe('CALLER');

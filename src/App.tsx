@@ -143,16 +143,6 @@ export default function App() {
     addCallNode(contractId, signature, viewportCenter());
   }
 
-  function editSelectedNode(patch: Record<string, unknown>) {
-    if (!selectedId) return;
-    if ('parent' in patch) {
-      const parent = patch.parent as string | undefined;
-      editVisual(p => setNodeParent(p, selectedId, parent));
-    } else {
-      editVisual(p => updateNode(p, selectedId, patch));
-    }
-  }
-
   async function compile() {
     const currentRevision = revision.current;
     const compiler = client.current ?? new CompilerClient();
@@ -382,7 +372,6 @@ export default function App() {
                   <NodeInspector
                     node={project.nodes.find(n => n.id === selectedId) ?? null}
                     project={project}
-                    onChange={editSelectedNode}
                   />
                 </Box>
               </Box>
