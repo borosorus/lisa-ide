@@ -363,7 +363,7 @@ export default function App() {
             </Box>
           </>}
         </Paper>
-        <Paper className="pane output-pane" elevation={0}>
+        <Paper className={`pane output-pane${outputOpen ? '' : ' output-collapsed'}`} elevation={0}>
           <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
             <Button size="small" onClick={() => setOutputOpen(open => !open)} aria-expanded={outputOpen}
               sx={{ justifyContent: 'flex-start', minWidth: 0 }}>
