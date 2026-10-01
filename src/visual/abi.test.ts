@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { canonicalInputType, isValidAddress, parseAbiJson } from './abi';
+import { outputHeadOffsets } from './model';
 
 const ERC20 = JSON.stringify([
   { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ name: 'o', type: 'address' }], outputs: [{ type: 'uint256' }] },
@@ -64,10 +65,61 @@ describe('parseAbiJson', () => {
     expect(functions[0].mutability).toBe('nonpayable');
   });
 
+  it('preserves parameter and output names when the ABI has them', () => {
+    const { functions } = parseAbiJson(JSON.stringify([{
+      type: 'function', name: 'balanceOf', stateMutability: 'view',
+      inputs: [{ name: 'owner', type: 'address' }, { type: 'uint8' }],
+      outputs: [{ name: 'balance', type: 'uint' }, { type: 'bool' }],
+    }]));
+    expect(functions[0].signature).toBe('balanceOf(address,uint8)');
+    expect(functions[0].inputNames).toEqual(['owner', null]);
+    expect(functions[0].outputNames).toEqual(['balance', null]);
+    // Bare uint canonicalizes; raw spellings survive only for non-word types.
+    expect(functions[0].outputs).toEqual(['uint256', 'bool']);
+  });
+
+  it('omits name arrays entirely when the ABI names nothing', () => {
+    const { functions } = parseAbiJson(JSON.stringify([{
+      type: 'function', name: 'ping', inputs: [], outputs: [{ type: 'string' }],
+    }]));
+    expect(functions[0]).not.toHaveProperty('inputNames');
+    expect(functions[0]).not.toHaveProperty('outputNames');
+    expect(functions[0].outputs).toEqual(['string']);
+  });
+
+  it('keeps dynamic output types as raw text for the canvas to mark', () => {
+    const { functions } = parseAbiJson(JSON.stringify([{
+      type: 'function', name: 'meta', inputs: [],
+      outputs: [{ type: 'bytes' }, { type: 'uint256[]' }, { type: 'tuple', components: [] }],
+    }]));
+    expect(functions[0].outputs).toEqual(['bytes', 'uint256[]', 'tuple']);
+  });
+
   it('throws clear errors for malformed ABIs', () => {
     expect(() => parseAbiJson('not json')).toThrowError(/valid JSON/);
     expect(() => parseAbiJson('{"name":"x"}')).toThrowError(/JSON array/);
     expect(() => parseAbiJson('[{"type":"event","name":"E"}]')).toThrowError(/no callable functions/);
+  });
+});
+
+describe('outputHeadOffsets', () => {
+  it('places each static output at its head word', () => {
+    expect(outputHeadOffsets(['uint256', 'bool', 'address', 'bytes4'])).toEqual([0, 32, 64, 96]);
+  });
+
+  it('gives dynamic predecessors one head slot', () => {
+    // string occupies one head word (an offset); the uint after it lives at word 1.
+    expect(outputHeadOffsets(['string', 'uint256'])).toEqual([0, 32]);
+    expect(outputHeadOffsets(['bytes', 'bool', 'uint256[]'])).toEqual([0, 32, 64]);
+  });
+
+  it('counts static arrays as multiple head words', () => {
+    expect(outputHeadOffsets(['uint256[3]', 'uint256'])).toEqual([0, 96]);
+  });
+
+  it('nulls out outputs after a head width that cannot be established', () => {
+    expect(outputHeadOffsets(['tuple', 'uint256'])).toEqual([null, null]);
+    expect(outputHeadOffsets(['uint256', 'tuple', 'bool'])).toEqual([0, null, null]);
   });
 });
 

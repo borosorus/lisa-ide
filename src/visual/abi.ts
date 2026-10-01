@@ -1,4 +1,4 @@
-import type { ContractFunction, Mutability } from './model';
+import { canonicalWordType, type ContractFunction, type Mutability } from './model';
 
 /**
  * Paste-an-ABI-JSON parsing. Produces canonical function signatures that
@@ -27,20 +27,7 @@ const MUTABILITIES: readonly string[] = ['pure', 'view', 'nonpayable', 'payable'
 
 /** Types encodeCall can place into an argument word (static ABI subset). */
 export function canonicalInputType(type: unknown): string | null {
-  if (typeof type !== 'string') return null;
-  if (type === 'address' || type === 'bool') return type;
-  if (type === 'uint') return 'uint256';
-  const uint = /^uint(\d{1,3})$/.exec(type);
-  if (uint) {
-    const width = Number(uint[1]);
-    return width >= 8 && width <= 256 && width % 8 === 0 ? `uint${width}` : null;
-  }
-  const bytes = /^bytes(\d{1,2})$/.exec(type);
-  if (bytes) {
-    const width = Number(bytes[1]);
-    return width >= 1 && width <= 32 ? `bytes${width}` : null;
-  }
-  return null;
+  return typeof type === 'string' ? canonicalWordType(type) : null;
 }
 
 export function isValidAddress(address: unknown): address is string {
@@ -51,14 +38,21 @@ function isEntry(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function paramTypes(value: unknown): readonly string[] | null {
+interface ParsedParams {
+  readonly types: readonly string[];
+  readonly names: readonly (string | null)[];
+}
+
+function parseParams(value: unknown): ParsedParams | null {
   if (!Array.isArray(value)) return null;
   const types: string[] = [];
+  const names: (string | null)[] = [];
   for (const param of value) {
     if (!isEntry(param) || typeof param.type !== 'string') return null;
     types.push(param.type);
+    names.push(typeof param.name === 'string' && param.name.length > 0 ? param.name : null);
   }
-  return types;
+  return { types, names };
 }
 
 export function parseAbiJson(text: string): AbiParseResult {
@@ -79,8 +73,8 @@ export function parseAbiJson(text: string): AbiParseResult {
     const type = entry.type ?? 'function';
     if (type !== 'function') continue; // events/errors/constructors are not callable functions
     if (typeof entry.name !== 'string' || entry.name.length === 0) continue;
-    const inputs = paramTypes(entry.inputs ?? []);
-    const outputs = paramTypes(entry.outputs ?? []);
+    const inputs = parseParams(entry.inputs ?? []);
+    const outputs = parseParams(entry.outputs ?? []);
     if (!inputs || !outputs) {
       rejected.push({ name: entry.name, reason: 'inputs/outputs must be ABI parameter lists' });
       continue;
@@ -90,7 +84,7 @@ export function parseAbiJson(text: string): AbiParseResult {
       : 'nonpayable';
     const canonical: string[] = [];
     let unsupported: string | null = null;
-    for (const input of inputs) {
+    for (const input of inputs.types) {
       const kind = canonicalInputType(input);
       if (kind === null) {
         unsupported = input;
@@ -105,7 +99,7 @@ export function parseAbiJson(text: string): AbiParseResult {
       canonical.push(kind);
     }
     if (unsupported) {
-      rejected.push({ name: `${entry.name}(${inputs.join(',')})`, reason: `unsupported argument type: ${unsupported}` });
+      rejected.push({ name: `${entry.name}(${inputs.types.join(',')})`, reason: `unsupported argument type: ${unsupported}` });
       continue;
     }
     const signature = `${entry.name}(${canonical.join(',')})`;
@@ -115,7 +109,11 @@ export function parseAbiJson(text: string): AbiParseResult {
       signature,
       name: entry.name,
       inputs: canonical,
-      outputs,
+      ...(inputs.names.some(n => n !== null) ? { inputNames: inputs.names } : {}),
+      // Word-typed outputs canonicalize; anything else keeps its raw ABI
+      // text so the canvas can label it while marking it non-connectable.
+      outputs: outputs.types.map(type => canonicalWordType(type) ?? type),
+      ...(outputs.names.some(n => n !== null) ? { outputNames: outputs.names } : {}),
       mutability,
     });
   }

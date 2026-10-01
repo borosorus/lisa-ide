@@ -18,6 +18,66 @@ export interface ContractFunction {
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
   readonly mutability: Mutability;
+  /** ABI parameter names, aligned with `inputs`; null where the ABI has none. */
+  readonly inputNames?: readonly (string | null)[];
+  /** ABI output names, aligned with `outputs`; null where the ABI has none. */
+  readonly outputNames?: readonly (string | null)[];
+}
+
+/**
+ * Head-position byte offsets for decoding output words, aligned with
+ * `outputs`: word(i) where earlier static outputs, one head slot per dynamic
+ * predecessor. Null when a predecessor's head width cannot be established
+ * (tuples), in which case that output and the ones after it are not safely
+ * decodable.
+ */
+export function outputHeadOffsets(outputs: readonly string[]): (number | null)[] {
+  const offsets: (number | null)[] = [];
+  let cursor = 0;
+  let broken = false;
+  for (const type of outputs) {
+    if (broken) { offsets.push(null); continue; }
+    const width = headWidth(type, 0);
+    if (width === null) {
+      broken = true;
+      offsets.push(null);
+    } else {
+      offsets.push(cursor);
+      cursor += width * 32;
+    }
+  }
+  return offsets;
+}
+
+/** Bytes an output occupies in the return-data head; null when unknown. */
+function headWidth(type: string, depth: number): number | null {
+  if (depth > 4) return null;
+  if (canonicalWordType(type)) return 1;
+  if (type === 'string' || type === 'bytes' || type.endsWith('[]')) return 1;
+  const array = /^(.*)\[(\d+)\]$/.exec(type);
+  if (array) {
+    const inner = headWidth(array[1], depth + 1);
+    const count = Number(array[2]);
+    return inner === null || count > 256 ? null : inner * count;
+  }
+  return null;
+}
+
+/** Static one-word ABI types the decoder can read: uintN, address, bool, bytesN. */
+export function canonicalWordType(type: string): string | null {
+  if (type === 'address' || type === 'bool') return type;
+  if (type === 'uint') return 'uint256';
+  const uint = /^uint(\d{1,3})$/.exec(type);
+  if (uint) {
+    const width = Number(uint[1]);
+    return width >= 8 && width <= 256 && width % 8 === 0 ? `uint${width}` : null;
+  }
+  const bytes = /^bytes(\d{1,2})$/.exec(type);
+  if (bytes) {
+    const width = Number(bytes[1]);
+    return width >= 1 && width <= 32 ? `bytes${width}` : null;
+  }
+  return null;
 }
 
 export function isReadFunction(fn: ContractFunction): boolean {

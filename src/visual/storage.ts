@@ -131,9 +131,21 @@ function parseContract(value: unknown): ContractResource | null {
     if (!inputs || !outputs) return null;
     if (inputs.some(t => canonicalInputType(t) === null)) return null;
     if (!signatureMatches(entry.signature, entry.name, inputs)) return null;
+    const names = (value: unknown, len: number): (string | null)[] | undefined | false => {
+      if (value === undefined) return undefined;
+      if (!Array.isArray(value) || value.length !== len || !value.every(n => n === null || typeof n === 'string')) return false;
+      return value as (string | null)[];
+    };
+    const inputNames = names(entry.inputNames, inputs.length);
+    const outputNames = names(entry.outputNames, outputs.length);
+    if (inputNames === false || outputNames === false) return null;
     const mutability = entry.mutability;
     if (mutability !== 'pure' && mutability !== 'view' && mutability !== 'nonpayable' && mutability !== 'payable') return null;
-    functions.push({ signature: entry.signature, name: entry.name, inputs, outputs, mutability });
+    functions.push({
+      signature: entry.signature, name: entry.name, inputs, outputs, mutability,
+      ...(inputNames ? { inputNames } : {}),
+      ...(outputNames ? { outputNames } : {}),
+    });
   }
   return { id: value.id, name: value.name, address: value.address, functions };
 }
