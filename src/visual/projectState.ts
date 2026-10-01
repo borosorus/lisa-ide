@@ -107,7 +107,34 @@ export function removeEdge(project: VisualProject, id: string): VisualProject {
   return { ...project, edges: project.edges.filter(e => e.id !== id) };
 }
 
+/**
+ * Assign or clear a node's IF parent. Rejected eagerly (project unchanged)
+ * when the target is unknown, an IF into itself or a descendant, or a
+ * non-IF node — validate.ts remains the final authority for stored graphs.
+ */
 export function setNodeParent(project: VisualProject, nodeId: string, parent: string | undefined): VisualProject {
+  const node = project.nodes.find(n => n.id === nodeId);
+  if (!node) return project;
+  if (parent === undefined) {
+    if (node.parent === undefined) return project;
+    return patchParent(project, nodeId, undefined);
+  }
+  if (parent === nodeId) return project;
+  const parentIf = project.nodes.find(n => n.id === parent);
+  if (!parentIf || parentIf.kind !== 'if') return project;
+  // Walk the target's ancestors: assigning into own subtree would cycle.
+  let ancestor: string | undefined = parent;
+  const seen = new Set<string>();
+  while (ancestor !== undefined && !seen.has(ancestor)) {
+    if (ancestor === nodeId) return project;
+    seen.add(ancestor);
+    ancestor = project.nodes.find(n => n.id === ancestor)?.parent;
+  }
+  if (node.parent === parent) return project;
+  return patchParent(project, nodeId, parent);
+}
+
+function patchParent(project: VisualProject, nodeId: string, parent: string | undefined): VisualProject {
   return {
     ...project,
     nodes: project.nodes.map(n => {

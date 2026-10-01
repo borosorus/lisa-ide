@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
 import { inputPorts, outputPorts, type PortSpec } from './ports';
+import type { Frame } from './containment';
 import { BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type LiteralType, type VisualProject } from './model';
 
 /**
@@ -19,6 +20,8 @@ export const NodeEditContext = createContext<NodeEditApi | null>(null);
 export interface LisaNodeData extends Record<string, unknown> {
   node: GraphNode;
   project: VisualProject;
+  /** Presentation-only IF container frame; sized onto the node wrapper. */
+  frame?: Frame;
 }
 
 /** Props every inline control needs so canvas gestures don't intercept it. */
@@ -105,27 +108,13 @@ export function LisaNode({ id, data }: NodeProps) {
       <Handle type="source" id="out" position={Position.Right}
         className={`port port-${node.literalType === 'address' ? 'address' : node.literalType === 'bool' ? 'bool' : 'value'}`} title="value (out)" />
     </div>}
-    {node.kind === 'binary' && <>
-      <div className="node-row left">
-        <Handle type="target" id="lhs" position={Position.Left} className="port port-value" title="left (value)" />
-        <span className="port-label">left</span>
-      </div>
-      <div className="node-row left">
-        <Handle type="target" id="rhs" position={Position.Left} className="port port-value" title="right (value)" />
-        <span className="port-label">right</span>
-      </div>
-      <div className="node-row control">
-        <select className="nodrag node-select" value={node.op} aria-label="Operator" {...stop}
-          onChange={e => edit?.patch(id, { op: e.target.value as BinaryOp })}>
-          {BINARY_OPS.map(op => <option key={op} value={op}>{op} ({OP_GLYPH[op]})</option>)}
-        </select>
-        <Handle type="source" id="out" position={Position.Right}
-          className={`port ${node.op === 'lt' || node.op === 'gt' || node.op === 'eq' ? 'port-condition' : 'port-value'}`} title="result (out)" />
-      </div>
-    </>}
-    {node.kind === 'if' && <div className="node-row">
-      <Handle type="target" id="condition" position={Position.Left} className="port port-condition" title="condition" />
-      <span className="port-label">condition</span>
+    {node.kind === 'binary' && <div className="node-row control">
+      <select className="nodrag node-select" value={node.op} aria-label="Operator" {...stop}
+        onChange={e => edit?.patch(id, { op: e.target.value as BinaryOp })}>
+        {BINARY_OPS.map(op => <option key={op} value={op}>{op} ({OP_GLYPH[op]})</option>)}
+      </select>
+      <Handle type="source" id="out" position={Position.Right}
+        className={`port ${node.op === 'lt' || node.op === 'gt' || node.op === 'eq' ? 'port-condition' : 'port-value'}`} title="result (out)" />
     </div>}
     {node.kind === 'call' && outputs.map(port => <div className="node-row right" key={port.name}>
       <span className={`port-label${port.connectable === false ? ' unsupported' : ''}`}

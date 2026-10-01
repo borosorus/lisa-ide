@@ -26,8 +26,8 @@ body { background: #0b1220; }
 .function-item { padding: 5px 10px; margin-top: 4px; cursor: grab; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border-color: #3a4c68 !important; }
 .lisa-node { position: relative; width: 240px; background: #172236; border: 1px solid #3a4c68; border-radius: 8px; padding: 8px 10px 9px; color: #dceaff; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .lisa-node-call { width: 250px; }
-.lisa-node-context, .lisa-node-literal, .lisa-node-binary, .lisa-node-if { min-width: 160px; width: auto; }
-.lisa-node-if { border-style: dashed; border-color: #f6c177; }
+.lisa-node-context, .lisa-node-literal, .lisa-node-binary { min-width: 160px; width: auto; }
+.lisa-node-if { border-style: dashed; border-color: #f6c177; background: rgba(23, 34, 54, 0.35); width: 100%; height: 100%; min-width: 0; box-sizing: border-box; }
 .node-head { display: flex; align-items: baseline; gap: 8px; min-height: 18px; }
 .node-kind { color: #7790ad; text-transform: uppercase; font-size: 10px; flex: none; }
 .node-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

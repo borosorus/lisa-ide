@@ -6,7 +6,9 @@ import {
 import '@xyflow/react/dist/style.css';
 import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
-import type { Vec2, VisualProject } from './model';
+import { absolutePosition, containmentTarget, descendants, iframes } from './containment';
+import { nodeSize } from './spawnPosition';
+import type { GraphNode, Vec2, VisualProject } from './model';
 import { FUNCTION_MIME } from './ContractsPanel';
 
 const nodeTypes = { lisa: LisaNode };
@@ -20,7 +22,7 @@ export interface CanvasApi {
 
 export interface VisualCanvasProps {
   project: VisualProject;
-  onMoveNodes(changes: Readonly<Record<string, Vec2>>): void;
+  onMoveNodes(changes: Readonly<Record<string, Vec2>>, parents?: Readonly<Record<string, string | null>>): void;
   onAddCallNode(contractId: string, signature: string, position: Vec2): void;
   onDeleteNodes(ids: string[]): void;
   onDeleteEdges(ids: string[]): void;
@@ -98,12 +100,49 @@ function Canvas({
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const nodes = useMemo<Node[]>(() => project.nodes.map(node => ({
-    id: node.id,
-    type: 'lisa',
-    position: project.positions[node.id] ?? { x: 0, y: 0 },
-    data: { node, project },
-  })), [project]);
+  const frames = useMemo(() => iframes(project), [project]);
+  const nodes = useMemo<Node[]>(() => {
+    // xyflow resolves parentId against earlier entries, so ancestors must be
+    // projected before their children; creation order stays otherwise.
+    const byId = new Map(project.nodes.map(n => [n.id, n] as const));
+    const depthOf = (node: GraphNode): number => {
+      let depth = 0;
+      const seen = new Set<string>([node.id]);
+      let parent = node.parent;
+      while (parent !== undefined && !seen.has(parent)) {
+        seen.add(parent);
+        depth += 1;
+        parent = byId.get(parent)?.parent;
+      }
+      return depth;
+    };
+    const ordered = project.nodes.map((node, index) => ({ node, index, depth: depthOf(node) }))
+      .sort((a, b) => a.depth - b.depth || a.index - b.index);
+    return ordered.map(({ node }) => {
+      const position = project.positions[node.id] ?? { x: 0, y: 0 };
+      const frame = frames.get(node.id);
+      // Container frames live behind cards so they never swallow a drag that
+      // starts on an overlapping node; children always outrank their frame.
+      const zIndex = node.kind === 'if' ? 1 : 10;
+      const parentOk = node.parent !== undefined && project.nodes.some(n => n.id === node.parent && n.kind === 'if');
+      if (!parentOk || node.parent === undefined) {
+        return {
+          id: node.id, type: 'lisa', position, zIndex,
+          ...(frame ? { style: { width: frame.rect.width, height: frame.rect.height } } : {}),
+          data: { node, project, frame },
+        };
+      }
+      // React Flow nests transforms: children carry parent-relative positions.
+      const parentAbs = absolutePosition(project, node.parent);
+      return {
+        id: node.id, type: 'lisa',
+        parentId: node.parent,
+        position: { x: position.x - parentAbs.x, y: position.y - parentAbs.y },
+        zIndex,
+        data: { node, project, frame },
+      };
+    });
+  }, [project, frames]);
 
   const edges = useMemo<Edge[]>(() => project.edges.map(edge => ({
     id: edge.id,
@@ -117,6 +156,10 @@ function Canvas({
 
   const nodesRef = useRef(project.nodes);
   nodesRef.current = project.nodes;
+  // xyflow's internal store mirrors the projected nodes (including parentId
+  // nesting), which the drag callback must consult without re-binding.
+  const rfNodesRef = useRef<Node[]>([]);
+  rfNodesRef.current = nodes;
   useEffect(() => {
     if (focusNodeId && nodesRef.current.some(n => n.id === focusNodeId)) {
       void fitView({ nodes: [{ id: focusNodeId }], maxZoom: 1, duration: 250 });
@@ -149,6 +192,58 @@ function Canvas({
     return !!sourcePort && !!targetPort && canConnect(sourcePort, targetPort);
   }, [project]);
 
+  /*
+   * Drag end is where presentation meets semantics. Stored positions are
+   * absolute; the drag event reports each directly dragged node in its own
+   * projection space (parent-relative once React Flow nests a child), and
+   * `group` holds only independently dragged nodes — RF children carried by
+   * a dragged parent are added from the semantic subtree, each moving by
+   * the ancestor's delta. A node whose center lands inside an IF body
+   * enters that scope, leaving every body exits its old one. Pure moves
+   * stay positional; only a changed containment is a semantic edit.
+   */
+  const onNodeDragStop = useCallback((_: MouseEvent | TouchEvent, node: Node, group?: Node[]) => {
+    const saved = (id: string): Vec2 => project.positions[id] ?? { x: 0, y: 0 };
+    const changes: Record<string, Vec2> = {};
+    const draggedIds: string[] = [];
+    for (const m of [...(group ?? []), node]) {
+      const base = m.parentId === undefined ? { x: 0, y: 0 } : saved(m.parentId);
+      const absolute = { x: m.position.x + base.x, y: m.position.y + base.y };
+      changes[m.id] = absolute;
+      draggedIds.push(m.id);
+    }
+    for (const id of draggedIds) {
+      const delta = { x: changes[id].x - saved(id).x, y: changes[id].y - saved(id).y };
+      for (const childId of descendants(project, id)) {
+        if (changes[childId] !== undefined) continue;
+        const before = saved(childId);
+        changes[childId] = { x: before.x + delta.x, y: before.y + delta.y };
+      }
+    }
+    const dragged = project.nodes.find(n => n.id === node.id);
+    if (!dragged) return;
+    // Hit-test the dragged card against frames, translated to their own
+    // post-drag places when an IF was part of this drag.
+    const excluded = new Set<string>([node.id, ...descendants(project, node.id)]);
+    const target = containmentTarget({
+      movedRect: { ...changes[node.id], ...nodeSize(dragged.kind) },
+      frames: [...frames.values()].filter(f => !excluded.has(f.id)).map(f => {
+        const after = changes[f.id];
+        if (after === undefined) return f;
+        const dx = after.x - saved(f.id).x;
+        const dy = after.y - saved(f.id).y;
+        return {
+          ...f,
+          rect: { ...f.rect, x: f.rect.x + dx, y: f.rect.y + dy },
+          body: { ...f.body, x: f.body.x + dx, y: f.body.y + dy },
+        };
+      }),
+    });
+    const parents: Record<string, string | null> = {};
+    if (target !== dragged.parent) parents[node.id] = target ?? null;
+    onMoveNodes(changes, parents);
+  }, [project, frames, onMoveNodes]);
+
   return <div className="canvas-host" aria-label="Visual canvas" ref={hostRef}
     onDrop={onDrop} onDragOver={onDragOver}
   >
@@ -160,9 +255,7 @@ function Canvas({
         fitView
         deleteKeyCode={null}
         proOptions={{ hideAttribution: true }}
-        onNodeDragStop={(_, node, group) => onMoveNodes(Object.fromEntries(
-          [...(group ?? []), node].map(moved => [moved.id, moved.position] as const),
-        ))}
+        onNodeDragStop={onNodeDragStop}
         onNodesDelete={deleted => onDeleteNodes(deleted.map(node => node.id))}
         onEdgesDelete={deleted => onDeleteEdges(deleted.map(edge => edge.id))}
         onConnect={c => {

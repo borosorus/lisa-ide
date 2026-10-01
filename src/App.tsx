@@ -97,11 +97,18 @@ export default function App() {
     editVisual(p => addNode(p, { id, kind: 'call', contractId, signature }, spawnNear(p, anchor, 'call')));
   }
 
-  function moveNodes(changes: Readonly<Record<string, Vec2>>) {
-    editVisual(p => Object.entries(changes).reduce(
-      (next, [id, position]) => setNodePosition(next, id, position),
-      p,
-    ), true);
+  function moveNodes(changes: Readonly<Record<string, Vec2>>, parents: Readonly<Record<string, string | null>> = {}) {
+    const semantic = Object.keys(parents).length > 0;
+    editVisual(p => {
+      let next = Object.entries(changes).reduce(
+        (acc, [id, position]) => setNodePosition(acc, id, position),
+        p,
+      );
+      for (const [id, parent] of Object.entries(parents)) {
+        next = setNodeParent(next, id, parent === null ? undefined : parent);
+      }
+      return next;
+    }, !semantic);
   }
 
   function addVisualNode(partial: GraphNodeDraft, prefix: string) {

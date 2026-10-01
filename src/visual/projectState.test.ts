@@ -114,6 +114,21 @@ describe('nodes', () => {
     expect(p.nodes.find(n => n.id === 'lit1')).not.toHaveProperty('parent');
   });
 
+  it('setNodeParent rejects invalid containment without touching the project', () => {
+    let p = emptyProject();
+    p = addNode(p, { id: 'if1', kind: 'if' }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'if2', kind: 'if', parent: 'if1' }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '7' }, { x: 0, y: 0 });
+    expect(setNodeParent(p, 'if1', 'if1')).toBe(p);                      // self
+    expect(setNodeParent(p, 'if1', 'if2')).toBe(p);                      // own descendant -> cycle
+    expect(setNodeParent(p, 'if1', 'lit1')).toBe(p);                     // non-IF parent
+    expect(setNodeParent(p, 'if1', 'ghost')).toBe(p);                    // unknown parent
+    expect(setNodeParent(p, 'ghost', 'if1')).toBe(p);                    // unknown node
+    const nested = setNodeParent(p, 'lit1', 'if2');
+    expect(nested.nodes.find(n => n.id === 'lit1')?.parent).toBe('if2'); // legit nesting
+    expect(setNodeParent(nested, 'lit1', 'if2')).toBe(nested);           // no-op is referential
+  });
+
   it('connectPort replaces the existing driver of an input port', () => {
     let p = emptyProject();
     p = addNode(p, { id: 'a', kind: 'context', name: 'SELF' }, { x: 0, y: 0 });
