@@ -1,6 +1,6 @@
 import { SOURCE_STORAGE_KEY } from '../editor/sourceStorage';
 import {
-  BINARY_OPS, CONTEXT_NAMES, LITERAL_TYPES, WORD_DECODERS,
+  BINARY_OPS, CONTEXT_NAMES, isValidLiteral, WORD_DECODERS,
   emptyProject,
   type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type Vec2, type VisualProject,
 } from './model';
@@ -92,23 +92,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function parseVisual(value: unknown): VisualProject {
   if (!isRecord(value)) throw new Error('Saved visual project must be an object');
+  const contracts = parseItems(value.contracts, parseContract, 'contracts');
+  const nodes = parseItems(value.nodes, parseNode, 'nodes');
+  const nodeIds = new Set(nodes.map(n => n.id));
+  // Edges dangling from repaired-away nodes cannot mean anything either.
+  const edges = parseItems(value.edges, parseEdge, 'edges')
+    .filter(e => nodeIds.has(e.from.node) && nodeIds.has(e.to.node));
+  const positions = parsePositions(value.positions);
   return {
-    contracts: parseArray(value.contracts, parseContract, 'contracts'),
-    nodes: parseArray(value.nodes, parseNode, 'nodes'),
-    edges: parseArray(value.edges, parseEdge, 'edges'),
-    positions: parsePositions(value.positions),
+    contracts,
+    nodes,
+    edges,
+    positions: Object.fromEntries(Object.entries(positions).filter(([id]) => nodeIds.has(id))),
   };
 }
 
-function parseArray<T>(
-  value: unknown, item: (entry: unknown, index: number) => T | null, label: string,
+/** Invalid individual entries are dropped; a malformed container is fatal. */
+function parseItems<T>(
+  value: unknown, item: (entry: unknown) => T | null, label: string,
 ): T[] {
   if (!Array.isArray(value)) throw new Error(`Saved ${label} must be an array`);
-  return value.map((entry, index) => {
-    const parsed = item(entry, index);
-    if (parsed === null) throw new Error(`Saved ${label}[${index}] is invalid`);
-    return parsed;
-  });
+  return value.map(entry => item(entry)).filter((entry): entry is T => entry !== null);
 }
 
 function parseContract(value: unknown): ContractResource | null {
@@ -150,14 +154,10 @@ function parseNode(value: unknown): GraphNode | null {
       if (!CONTEXT_NAMES.includes(value.name as never)) return null;
       return { ...base, kind: 'context', name: value.name as ContextName };
     case 'literal': {
-      if (!LITERAL_TYPES.includes(value.literalType as never)) return null;
+      if (value.literalType !== 'uint' && value.literalType !== 'address' && value.literalType !== 'bool') return null;
       if (typeof value.literal !== 'string') return null;
-      const type = value.literalType as 'uint' | 'address' | 'bool';
-      const literal = value.literal;
-      if (type === 'uint' && !/^(0x[0-9a-fA-F]+|\d+)$/.test(literal)) return null;
-      if (type === 'address' && !isValidAddress(literal)) return null;
-      if (type === 'bool' && literal !== 'true' && literal !== 'false') return null;
-      return { ...base, kind: 'literal', literalType: type, literal };
+      if (!isValidLiteral(value.literalType, value.literal)) return null;
+      return { ...base, kind: 'literal', literalType: value.literalType, literal: value.literal };
     }
     case 'binary':
       if (!BINARY_OPS.includes(value.op as never)) return null;
@@ -194,11 +194,10 @@ function parsePositions(value: unknown): Readonly<Record<string, Vec2>> {
   if (!isRecord(value)) throw new Error('Saved positions must be an object');
   const positions: Record<string, Vec2> = {};
   for (const [id, entry] of Object.entries(value)) {
-    if (!isRecord(entry) || typeof entry.x !== 'number' || typeof entry.y !== 'number'
-        || !Number.isFinite(entry.x) || !Number.isFinite(entry.y)) {
-      throw new Error(`Saved position for "${id}" is invalid`);
+    if (isRecord(entry) && typeof entry.x === 'number' && typeof entry.y === 'number'
+        && Number.isFinite(entry.x) && Number.isFinite(entry.y)) {
+      positions[id] = { x: entry.x, y: entry.y };
     }
-    positions[id] = { x: entry.x, y: entry.y };
   }
   return positions;
 }

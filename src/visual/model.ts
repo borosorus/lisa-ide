@@ -46,6 +46,13 @@ export type WordDecoder = (typeof WORD_DECODERS)[number];
 export const LITERAL_TYPES = ['uint', 'address', 'bool'] as const;
 export type LiteralType = (typeof LITERAL_TYPES)[number];
 
+/** The single grammar for literal text, shared by validation, UI, and storage. */
+export function isValidLiteral(type: LiteralType, text: string): boolean {
+  return type === 'uint' ? /^(0x[0-9a-fA-F]+|\d+)$/.test(text)
+    : type === 'address' ? /^0x[0-9a-fA-F]{40}$/.test(text)
+    : text === 'true' || text === 'false';
+}
+
 interface NodeBase {
   readonly id: string;
   /** Id of the IfNode whose body contains this node; absent at top level. */

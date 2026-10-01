@@ -1,7 +1,8 @@
+import { useEffect, useState } from 'react';
 import { Box, Button, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import {
-  BINARY_OPS, CONTEXT_NAMES, LITERAL_TYPES, WORD_DECODERS,
-  type GraphNode, type GraphNodeDraft, type VisualProject,
+  BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, WORD_DECODERS,
+  type GraphNode, type GraphNodeDraft, type LiteralType, type VisualProject,
 } from './model';
 
 /** Sidebar: create nodes, and edit the fields of the selected node. */
@@ -46,7 +47,7 @@ export function NodeInspector({ node, project, onChange }: {
         onChange={literalType => onChange({ literalType, literal: literalType === 'bool' ? 'true' : literalType === 'address' ? '0x0000000000000000000000000000000000000000' : '0' })} />
       {node.literalType === 'bool'
         ? <SelectField label="Value" value={node.literal} options={['true', 'false']} onChange={literal => onChange({ literal })} />
-        : <TextField size="small" label="Value" value={node.literal} onChange={e => onChange({ literal: e.target.value })} />}
+        : <LiteralField type={node.literalType} value={node.literal} onCommit={literal => onChange({ literal })} />}
     </>}
 
     {node.kind === 'binary' && <SelectField label="Operation" value={node.op} options={[...BINARY_OPS]}
@@ -70,6 +71,29 @@ export function NodeInspector({ node, project, onChange }: {
       options={['', ...ifs.map(n => n.id)]} render={id => id === '' ? 'Top level' : id}
       onChange={id => onChange({ parent: id === '' ? undefined : id })} />}
   </Stack>;
+}
+
+/**
+ * Free-text literal editor: commits only text the graph grammar accepts, so
+ * mid-typed values never reach the project (and thus never reach storage,
+ * whose parser would otherwise drop the node on reload).
+ */
+function LiteralField({ type, value, onCommit }: {
+  type: LiteralType;
+  value: string;
+  onCommit: (literal: string) => void;
+}) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  return <TextField
+    size="small" label="Value" value={text}
+    error={!isValidLiteral(type, text)}
+    onChange={event => {
+      setText(event.target.value);
+      if (isValidLiteral(type, event.target.value)) onCommit(event.target.value);
+    }}
+    onBlur={() => { if (!isValidLiteral(type, text)) setText(value); }}
+  />;
 }
 
 function SelectField({ label, value, options, onChange, render }: {

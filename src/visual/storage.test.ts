@@ -47,36 +47,53 @@ describe('parseStoredProject', () => {
     expect(parsed.mode).toBe('visual');
   });
 
-  it('rejects malformed or unsupported saves', () => {
+  it('drops invalid entries and keeps the rest of the project', () => {
+    const withBadNode = parseStoredProject(JSON.stringify({
+      ...PROJECT,
+      visual: { ...PROJECT.visual, nodes: [{ id: 'x', kind: 'teleport' }, ...PROJECT.visual.nodes] },
+    }));
+    expect(withBadNode.visual.nodes.map(n => n.id)).toEqual(PROJECT.visual.nodes.map(n => n.id));
+    // The dropped node's edges are gone too; the survivors are untouched.
+    expect(withBadNode.visual.contracts).toEqual(PROJECT.visual.contracts);
+    expect(withBadNode.codeSource).toBe(PROJECT.codeSource);
+
+    const badContract = parseStoredProject(JSON.stringify({
+      ...PROJECT, visual: { ...PROJECT.visual, contracts: [{ ...CONTRACT, address: 'nope' }] },
+    }));
+    expect(badContract.visual.contracts).toEqual([]);
+    expect(badContract.visual.nodes).toHaveLength(PROJECT.visual.nodes.length);
+
+    const badLiteral = parseStoredProject(JSON.stringify({
+      ...PROJECT, visual: { ...PROJECT.visual, nodes: [{ id: 'lit9', kind: 'literal', literalType: 'address', literal: '0x123' }] },
+    }));
+    expect(badLiteral.visual.nodes).toEqual([]);
+    // Edges whose endpoints were repaired away are dropped, not fatal.
+    expect(badLiteral.visual.edges).toEqual([]);
+  });
+
+  it('skips invalid positions and dangling edges', () => {
+    const withBadPositions = parseStoredProject(JSON.stringify({
+      ...PROJECT, visual: { ...PROJECT.visual, positions: { call1: { x: 40, y: 80 }, ghost: { x: Number.NaN, y: 0 } } },
+    }));
+    expect(withBadPositions.visual.positions).toEqual({ call1: { x: 40, y: 80 } });
+
+    const withDanglingEdge = parseStoredProject(JSON.stringify({
+      ...PROJECT, visual: { ...PROJECT.visual, edges: [...PROJECT.visual.edges, { id: 'ez', from: { node: 'ghost', port: 'out' }, to: { node: 'call1', port: 'arg:0' } }] },
+    }));
+    expect(withDanglingEdge.visual.edges.map(e => e.id)).toEqual(['e1', 'e2']);
+  });
+
+  it('rejects malformed structural containers', () => {
     expect(() => parseStoredProject('nope')).toThrowError(/valid JSON/);
     expect(() => parseStoredProject('[1,2]')).toThrowError(/must be an object/);
     expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, version: 2 }))).toThrowError(/version/);
     expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, mode: 'draw' }))).toThrowError(/mode/);
     expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, visual: {
-      ...PROJECT.visual,
-      nodes: [{ id: 'x', kind: 'teleport' }],
-    } }))).toThrowError(/nodes\[0\]/);
+      ...PROJECT.visual, nodes: { not: 'an array' },
+    } }))).toThrowError(/nodes must be an array/);
     expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, visual: {
-      ...PROJECT.visual,
-      contracts: [{ ...CONTRACT, address: 'nope' }],
-    } }))).toThrowError(/contracts\[0\]/);
-    expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, visual: {
-      ...PROJECT.visual,
-      nodes: [{ id: 'lit9', kind: 'literal', literalType: 'address', literal: '0x123' }],
-    } }))).toThrowError(/nodes\[0\]/);
-    expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, visual: {
-      ...PROJECT.visual,
-      positions: { call1: { x: 40, y: Number.NaN } },
-    } }))).toThrowError(/position/);
-  });
-
-  it('rejects call nodes without contract references and bad edges', () => {
-    expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, visual: {
-      ...PROJECT.visual, contracts: [], nodes: [{ id: 'a', kind: 'call' }], edges: [],
-    } }))).toThrowError(/nodes\[0\]/);
-    expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, visual: {
-      ...PROJECT.visual, nodes: [], edges: [{ id: 'e', from: { node: 'a' }, to: { node: 'b', port: 'p' } }],
-    } }))).toThrowError(/edges\[0\]/);
+      ...PROJECT.visual, positions: 'nope',
+    } }))).toThrowError(/positions must be an object/);
   });
 });
 
