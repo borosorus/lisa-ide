@@ -84,11 +84,13 @@ function Canvas({
     targetHandle: edge.to.port,
   })), [project.edges]);
 
+  const nodesRef = useRef(project.nodes);
+  nodesRef.current = project.nodes;
   useEffect(() => {
-    if (focusNodeId && project.nodes.some(n => n.id === focusNodeId)) {
+    if (focusNodeId && nodesRef.current.some(n => n.id === focusNodeId)) {
       void fitView({ nodes: [{ id: focusNodeId }], maxZoom: 1, duration: 250 });
     }
-  }, [focusNodeId, project.nodes, fitView]);
+  }, [focusNodeId, fitView]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -126,7 +128,9 @@ function Canvas({
       fitView
       deleteKeyCode={null}
       proOptions={{ hideAttribution: true }}
-      onNodeDragStop={(_, node) => onMoveNodes({ [node.id]: node.position })}
+      onNodeDragStop={(_, node, group) => onMoveNodes(Object.fromEntries(
+        [...(group ?? []), node].map(moved => [moved.id, moved.position] as const),
+      ))}
       onNodesDelete={deleted => onDeleteNodes(deleted.map(node => node.id))}
       onEdgesDelete={deleted => onDeleteEdges(deleted.map(edge => edge.id))}
       onConnect={c => {

@@ -31,6 +31,7 @@ body { background: #0b1220; }
 .react-flow .port { width: 10px; height: 10px; border: 1px solid #0b1220; border-radius: 50%; }
 .react-flow .port-value { background: #8ebdff; }
 .react-flow .port-address { background: #9fd89f; }
+.react-flow .port-bool { background: #ef8f8f; }
 .react-flow .port-condition { background: #f6c177; }
 .react-flow .port-result { background: #d9a7e7; }
 @media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .visual-workspace { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; } .visual-workspace .canvas-pane { grid-row: auto; } .visual-workspace .side-pane { grid-row: auto; } }

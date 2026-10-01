@@ -41,6 +41,28 @@ describe('contracts', () => {
     expect(p.positions.call1).toBeUndefined();
     expect(p.positions.lit1).toEqual({ x: 0, y: 0 });
   });
+
+  it('cascades decoders fed only by the removed contract\'s calls', () => {
+    let p = projectWithCall();
+    p = addNode(p, { id: 'ret1', kind: 'return', decoder: 'uint256' }, { x: 0, y: 0 });
+    p = addEdge(p, { from: { node: 'call1', port: 'result' }, to: { node: 'ret1', port: 'result' } });
+    p = removeContract(p, 'c1');
+    expect(p.nodes.map(n => n.id)).toEqual(['lit1']);
+    expect(p.edges).toEqual([]);
+    expect(p.positions.ret1).toBeUndefined();
+  });
+
+  it('keeps decoders whose call belongs to a different contract', () => {
+    let p = projectWithCall();
+    p = addContract(p, contract('DAI')); // c2
+    const c2 = p.contracts[1].id;
+    p = addNode(p, { id: 'call2', kind: 'call', contractId: c2, signature: 'balanceOf(address)' }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'ret2', kind: 'return', decoder: 'uint256' }, { x: 0, y: 0 });
+    p = addEdge(p, { from: { node: 'call2', port: 'result' }, to: { node: 'ret2', port: 'result' } });
+    p = removeContract(p, 'c1');
+    expect(p.nodes.map(n => n.id)).toEqual(['lit1', 'call2', 'ret2']);
+    expect(p.edges.some(e => e.from.node === 'call2')).toBe(true);
+  });
 });
 
 describe('nodes', () => {
