@@ -1,7 +1,7 @@
 import {
   inputPorts, outputPorts, canConnect, type PortSpec,
 } from './ports';
-import type { GraphNode, VisualProject } from './model';
+import { isValidLiteral, type GraphNode, type VisualProject } from './model';
 
 /**
  * Graph-level validation and deterministic ordering, run before lowering.
@@ -55,11 +55,8 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
         diagnostics.push({ node: node.id, message: `Contract "${contract.name}" no longer has ${node.signature}` });
       }
     }
-    if (node.kind === 'literal') {
-      const ok = node.literalType === 'uint' ? /^(0x[0-9a-fA-F]+|\d+)$/.test(node.literal)
-        : node.literalType === 'address' ? /^0x[0-9a-fA-F]{40}$/.test(node.literal)
-        : node.literal === 'true' || node.literal === 'false';
-      if (!ok) diagnostics.push({ node: node.id, message: `Literal "${node.literal}" is not a valid ${node.literalType}` });
+    if (node.kind === 'literal' && !isValidLiteral(node.literalType, node.literal)) {
+      diagnostics.push({ node: node.id, message: `Literal "${node.literal}" is not a valid ${node.literalType}` });
     }
     if (node.kind === 'return' && node.decoder === 'word'
         && !(Number.isSafeInteger(node.offset ?? 0) && (node.offset ?? 0) >= 0 && (node.offset ?? 0) % 32 === 0)) {
@@ -88,14 +85,11 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     if (source.id === target.id) {
       diagnostics.push({ node: source.id, message: 'Node feeds itself' });
     } else if (!inScope(source, target, byId)) {
+      // Also governs result edges: the builder decodes return data in the
+      // call's scope or any block nested inside it, but never shallower.
       diagnostics.push({
         node: target.id,
         message: 'Value produced inside an IF block cannot be used outside that block',
-      });
-    } else if (edge.from.port === 'result' && (source.parent ?? '') !== (target.parent ?? '')) {
-      diagnostics.push({
-        node: target.id,
-        message: 'Return data must be decoded in the same IF block as its call',
       });
     }
   }

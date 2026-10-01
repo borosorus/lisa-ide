@@ -185,6 +185,46 @@ describe('validateProject', () => {
     expect(validateProject(inward)).toEqual([]);
   });
 
+  it('allows a decoder at or below its call\'s block but not above it', () => {
+    // The builder decodes return data in the call's scope or any nested block,
+    // so a decoder inside a nested IF below the call is valid.
+    const nestedDecoder = project({
+      nodes: [
+        { id: 'self', kind: 'context', name: 'SELF' },
+        { id: 'if1', kind: 'if' },
+        { id: 'cond1', kind: 'context', name: 'GAS' },
+        { id: 'call', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1' },
+        { id: 'if2', kind: 'if', parent: 'if1' },
+        { id: 'cond2', kind: 'context', name: 'GAS' },
+        { id: 'ret', kind: 'return', decoder: 'uint256', parent: 'if2' },
+      ],
+      edges: [
+        edge('self', 'out', 'call', 'arg:0'),
+        edge('cond1', 'out', 'if1', 'condition'),
+        edge('cond2', 'out', 'if2', 'condition'),
+        edge('call', 'result', 'ret', 'result'),
+      ],
+    });
+    expect(validateProject(nestedDecoder)).toEqual([]);
+
+    // Decoding ABOVE the call would read return data that no longer exists.
+    const shallowerDecoder = project({
+      nodes: [
+        { id: 'self', kind: 'context', name: 'SELF' },
+        { id: 'if1', kind: 'if' },
+        { id: 'cond1', kind: 'context', name: 'GAS' },
+        { id: 'call', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1' },
+        { id: 'ret', kind: 'return', decoder: 'uint256' },
+      ],
+      edges: [
+        edge('self', 'out', 'call', 'arg:0'),
+        edge('cond1', 'out', 'if1', 'condition'),
+        edge('call', 'result', 'ret', 'result'),
+      ],
+    });
+    expect(messages(shallowerDecoder).join()).toContain('cannot be used outside');
+  });
+
   it('reports dangling parent and parent cycles', () => {
     const dangling = project({ nodes: [{ id: 'x', kind: 'context', name: 'SELF', parent: 'ghost' }] });
     expect(messages(dangling)).toContain('Belongs to a missing IF block');

@@ -99,7 +99,7 @@ function emitScope(ctx: Context, order: readonly string[], parent: string | unde
       emitCall(ctx, node, lines, pad);
     } else if (node.kind === 'if') {
       if (depth === 0) push(lines, '');
-      lines.push(`${pad}p.if(${exprOf(ctx, `${id}:condition`)}, () => {`);
+      lines.push(`${pad}p.if(${exprOf(ctx, id, 'condition')}, () => {`);
       emitScope(ctx, order, id, lines, depth + 1);
       lines.push(`${pad}});`);
     }
@@ -111,11 +111,11 @@ function emitCall(ctx: Context, node: CallNode, lines: string[], pad: string): v
   const contract = ctx.project.contracts.find(c => c.id === node.contractId);
   if (!fn || !contract) throw new GraphError([{ node: node.id, message: 'Missing contract or function' }]);
   const target = ctx.names.get(contractKey(contract)) ?? `"${contract.address.toLowerCase()}"`;
-  const args = fn.inputs.map((_, index) => exprOf(ctx, `${node.id}:arg:${index}`));
+  const args = fn.inputs.map((_, index) => exprOf(ctx, node.id, `arg:${index}`));
   const valueFeed = fn.mutability === 'payable' ? ctx.feed.get(`${node.id}:value`) : undefined;
   const encoded = `encodeCall("${node.signature}"${args.length ? `, [${args.join(', ')}]` : ''})`;
   const callText = `p.${isReadFunction(fn) ? 'staticCall' : 'call'}(${target}, ${encoded}`
-    + (valueFeed ? `, ${exprOfKey(ctx, valueFeed)}` : '') + ')';
+    + (valueFeed ? `, ${exprOfSource(ctx, valueFeed)}` : '') + ')';
 
   const decoders = ctx.returnsByCall.get(node.id) ?? [];
   if (decoders.length === 0) {
@@ -135,16 +135,14 @@ function emitCall(ctx: Context, node: CallNode, lines: string[], pad: string): v
 }
 
 /** Expression text for whatever feeds `${nodeId}:${port}`; pure nodes inline. */
-function exprOf(ctx: Context, inputKey: string): string {
-  const source = ctx.feed.get(inputKey);
-  if (!source) {
-    const [node, port] = splitKey(inputKey);
-    throw new GraphError([{ node, port, message: `Input port "${port}" has no source` }]);
-  }
-  return exprOfKey(ctx, source);
+function exprOf(ctx: Context, nodeId: string, port: string): string {
+  const source = ctx.feed.get(`${nodeId}:${port}`);
+  if (!source) throw new GraphError([{ node: nodeId, port, message: `Input port "${port}" has no source` }]);
+  return exprOfSource(ctx, source);
 }
 
-function exprOfKey(ctx: Context, sourceKey: string): string {
+/** Source keys are `${nodeId}:${port}` where ports never contain ':'. */
+function exprOfSource(ctx: Context, sourceKey: string): string {
   const nodeId = sourceKey.slice(0, sourceKey.lastIndexOf(':'));
   const node = ctx.byId.get(nodeId);
   if (!node) throw new GraphError([{ node: nodeId, message: `Missing node "${nodeId}"` }]);
@@ -154,20 +152,20 @@ function exprOfKey(ctx: Context, sourceKey: string): string {
     case 'literal':
       return literalText(node);
     case 'binary': {
-      const lhs = exprOf(ctx, `${node.id}:lhs`);
-      const rhs = exprOf(ctx, `${node.id}:rhs`);
+      const lhs = exprOf(ctx, node.id, 'lhs');
+      const rhs = exprOf(ctx, node.id, 'rhs');
       return `(${lhs}).${node.op}(${rhs})`;
     }
-    case 'return':
-      return ctx.names.get(`ret:${nodeId}`) ?? nodeId;
+    case 'return': {
+      const name = ctx.names.get(`ret:${nodeId}`);
+      if (!name) {
+        throw new GraphError([{ node: nodeId, message: 'Decoder was never emitted before use' }]);
+      }
+      return name;
+    }
     default:
       throw new GraphError([{ node: nodeId, message: `Node "${nodeId}" cannot produce a value` }]);
   }
-}
-
-function splitKey(key: string): [string, string] {
-  const index = key.lastIndexOf(':');
-  return [key.slice(0, index), key.slice(index + 1)];
 }
 
 function literalText(node: Extract<GraphNode, { kind: 'literal' }>): string {
