@@ -49,6 +49,23 @@ describe('restricted LISA source', () => {
     expect(() => parseArtifact(JSON.stringify({ ...artifact, isa: 'lisa-v2' }))).toThrow(/Unsupported LISA ISA/);
   });
 
+  it('accepts value-like literal receivers, coercing exactly as builder arguments do', () => {
+    const output = compileSource(
+      'const p = createProgram(); p.call(SELF, encodeCall("f(uint256)", [(1n).add(2n)])); return p;',
+    );
+    expect(output.instructionCount).toBeGreaterThan(1);
+    expect(() => evaluateSource(
+      'const p = createProgram(); const b = p.staticCall(SELF, encodeCall("g(address)", ["0x2222222222222222222222222222222222222222"])).uint256(); const x = b.add("0x01"); return p;',
+    )).not.toThrow();
+  });
+
+  it('rejects booleans used as numeric values with a clear message', () => {
+    expect(() => evaluateSource('const p = createProgram(); p.if(true, () => {}); return p;'))
+      .toThrowError(/A boolean is not a numeric value/);
+    expect(() => evaluateSource('const p = createProgram(); const b = p.staticCall(SELF, encodeCall("balanceOf(address)", [SELF])).uint256(); b.add(true); return p;'))
+      .toThrowError(/A boolean is not a numeric value/);
+  });
+
   it.each([
     'const p = createProgram(); fetch("https://example.com"); return p;',
     'const p = createProgram(); p.constructor; return p;',

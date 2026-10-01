@@ -1,7 +1,7 @@
 import { parse } from 'acorn';
 import {
   CALLER, GAS, SELF, SELFBALANCE, TIMESTAMP, CallResult, ProgramBuilder, Value,
-  createProgram, encodeCall, rawCalldata,
+  createProgram, encodeCall, rawCalldata, toValue,
 } from '@bosorus/lisa-evm';
 
 type AstNode = { type: string; start: number; loc: { start: { line: number; column: number } }; [key: string]: any };
@@ -67,12 +67,24 @@ export function evaluateSource(source: string): ProgramBuilder {
             return fn(...args);
           }
           if (callee.type === 'MemberExpression' && !callee.computed && !callee.optional && callee.property.type === 'Identifier') {
-            const receiver = expression(callee.object, scope, depth + 1);
+            const receiver0 = expression(callee.object, scope, depth + 1);
             const method = callee.property.name as string;
+            // Value-like receivers (e.g. `(1n).add(2n)`) coerce exactly as builder
+            // arguments do; booleans have no word representation.
+            let receiver: unknown = receiver0;
+            if (typeof receiver0 === 'bigint' || typeof receiver0 === 'number' || typeof receiver0 === 'string') {
+              receiver = toValue(receiver0);
+            } else if (typeof receiver0 === 'boolean') {
+              return error(callee, 'A boolean is not a numeric value');
+            }
             const allowed = receiver instanceof ProgramBuilder ? builderMethods
               : receiver instanceof Value ? valueMethods
               : receiver instanceof CallResult ? resultMethods : undefined;
             if (!allowed?.has(method)) return error(callee, `Method is not available: ${method}`);
+            if ((allowed === valueMethods && args.some((arg: unknown) => typeof arg === 'boolean'))
+                || (method === 'if' && typeof args[0] === 'boolean')) {
+              return error(node, 'A boolean is not a numeric value');
+            }
             if (method === 'if') {
               const callback = node.arguments[1] as AstNode | undefined;
               if (args.length !== 2 || !callback || callback.type !== 'ArrowFunctionExpression')
