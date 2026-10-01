@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, CircularProgress, CssBaseline, MenuItem, Paper, Select,
+  Alert, Box, Button, Chip, CircularProgress, CssBaseline, IconButton, MenuItem, Paper, Select,
   Stack, Tab, Tabs, ThemeProvider, ToggleButton, ToggleButtonGroup, Typography, createTheme,
 } from '@mui/material';
 import { SourceEditor } from './editor/SourceEditor';
@@ -10,7 +10,7 @@ import { createArtifact, parseArtifact, type ProgramArtifact } from './compile/a
 import type { CompileDiagnostic, CompileOutput } from './compile/types';
 import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
-import { VisualCanvas } from './visual/VisualCanvas';
+import { VisualCanvas, type CanvasApi } from './visual/VisualCanvas';
 import {
   addContract, addNode, connectPort, removeContract, removeEdge, removeNodes,
   setNodeParent, setNodePosition, updateContract, updateNode,
@@ -54,7 +54,11 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
+  const [libraryTab, setLibraryTab] = useState(0);
+  const [libraryOpen, setLibraryOpen] = useState(true);
+  const [outputOpen, setOutputOpen] = useState(true);
   const client = useRef<CompilerClient | null>(null);
+  const canvasApi = useRef<CanvasApi | null>(null);
   const revision = useRef(0);
 
   useEffect(() => () => client.current?.cancel(), []);
@@ -105,6 +109,12 @@ export default function App() {
     const position = { x: 60 + (count % 5) * 220, y: 60 + Math.floor(count / 5) * 160 };
     setFocusNodeId(id);
     editVisual(p => addNode(p, { ...partial, id } as GraphNode, position));
+  }
+
+  /** Click-to-add from the library: land the node in the visible viewport. */
+  function addFunctionNode(contractId: string, signature: string) {
+    const center = canvasApi.current?.viewportCenter();
+    addCallNode(contractId, signature, center ?? { x: 60, y: 60 });
   }
 
   function editSelectedNode(patch: Record<string, unknown>) {
@@ -161,6 +171,14 @@ export default function App() {
     return cause instanceof Error ? cause.message : String(cause);
   }
 
+  /** One-line state shown on the collapsed output bar. */
+  function outputSummary() {
+    if (error) return '⚠ failed';
+    if (busy) return 'compiling…';
+    if (output) return `✓ compiled · ${output.byteSize} bytes`;
+    return 'idle';
+  }
+
   async function importArtifact(file: File) {
     const currentRevision = revision.current;
     const compiler = client.current ?? new CompilerClient();
@@ -211,7 +229,7 @@ export default function App() {
 
   return <ThemeProvider theme={theme}>
     <CssBaseline />
-    <Box className="app">
+    <Box className={mode === 'visual' ? 'app app-fixed' : 'app'}>
       <Stack className="topbar" direction="row" alignItems="center" justifyContent="space-between" gap={2}>
         <Box>
           <Typography variant="h5" fontWeight={700}>LISA IDE</Typography>
@@ -282,10 +300,11 @@ export default function App() {
             {renderOutput()}
           </Box>
         </Paper>
-      </Box> : <Box className="visual-workspace">
+      </Box> : <Box className={`visual-workspace${libraryOpen ? '' : ' library-collapsed'}`}>
         <Paper className="pane canvas-pane" elevation={0}>
           <Box className="pane-heading"><Typography variant="subtitle2">Canvas</Typography></Box>
           <VisualCanvas
+            canvasApi={canvasApi}
             project={project}
             onMoveNodes={moveNodes}
             onAddCallNode={addCallNode}
@@ -298,6 +317,7 @@ export default function App() {
               editVisual(p => ids.reduce(removeEdge, p));
             }}
             onConnect={(from, to) => editVisual(p => connectPort(p, { from, to }))}
+            onPatchNode={(id, fields) => editVisual(p => updateNode(p, id, fields))}
             onSelectNode={id => { setSelectedId(id); if (id !== null) setSelectedEdgeId(null); }}
             onSelectEdge={id => { setSelectedEdgeId(id); if (id !== null) setSelectedId(null); }}
             selectedNodeId={selectedId}
@@ -306,34 +326,52 @@ export default function App() {
           />
         </Paper>
         <Paper className="pane side-pane" elevation={0}>
-          <Box className="pane-heading"><Typography variant="subtitle2">Contracts / Nodes</Typography></Box>
-          <Box className="side-content">
-            <ContractsPanel
-              contracts={project.contracts}
-              onAddContract={contract => editVisual(p => addContract(p, contract))}
-              onUpdateContract={(id, patch) => editVisual(p => updateContract(p, id, patch))}
-              onRemoveContract={id => editVisual(p => removeContract(p, id))}
-            />
-            <Box className="side-section">
-              <VisualPalette onAdd={addVisualNode} />
-            </Box>
-            <Box className="side-section">
-              <Typography variant="subtitle2">Selected node</Typography>
-              <Box sx={{ mt: 0.5 }}>
-                <NodeInspector
-                  node={project.nodes.find(n => n.id === selectedId) ?? null}
-                  project={project}
-                  onChange={editSelectedNode}
+          <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+            {libraryOpen && <Typography variant="subtitle2">Library</Typography>}
+            <IconButton size="small" aria-label={libraryOpen ? 'Collapse library' : 'Expand library'}
+              onClick={() => setLibraryOpen(open => !open)} sx={{ p: 0.5 }}>
+              <Typography variant="body2">{libraryOpen ? '⟩' : '⟨'}</Typography>
+            </IconButton>
+          </Stack>
+          {libraryOpen && <>
+            <Tabs value={libraryTab} onChange={(_, value: number) => setLibraryTab(value)} variant="fullWidth">
+              <Tab label="Contracts" />
+              <Tab label="Nodes" />
+            </Tabs>
+            <Box className="side-content">
+              {libraryTab === 0 ? (
+                <ContractsPanel
+                  contracts={project.contracts}
+                  onAddContract={contract => editVisual(p => addContract(p, contract))}
+                  onUpdateContract={(id, patch) => editVisual(p => updateContract(p, id, patch))}
+                  onRemoveContract={id => editVisual(p => removeContract(p, id))}
+                  onAddFunction={addFunctionNode}
                 />
+              ) : (
+                <VisualPalette onAdd={addVisualNode} />
+              )}
+              <Box className="side-section">
+                <Typography variant="subtitle2">Selected node</Typography>
+                <Box sx={{ mt: 0.5 }}>
+                  <NodeInspector
+                    node={project.nodes.find(n => n.id === selectedId) ?? null}
+                    project={project}
+                    onChange={editSelectedNode}
+                  />
+                </Box>
               </Box>
             </Box>
-          </Box>
+          </>}
         </Paper>
         <Paper className="pane output-pane" elevation={0}>
-          <Box className="pane-heading"><Typography variant="subtitle2">Output</Typography></Box>
-          <Box className="output-content">
-            {renderOutput()}
-          </Box>
+          <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+            <Button size="small" onClick={() => setOutputOpen(open => !open)} aria-expanded={outputOpen}
+              sx={{ justifyContent: 'flex-start', minWidth: 0 }}>
+              {outputOpen ? '▾ Output' : '▸ Output'}
+            </Button>
+            {!outputOpen && <Typography variant="caption" color="text.secondary">{outputSummary()}</Typography>}
+          </Stack>
+          {outputOpen && <Box className="output-content">{renderOutput()}</Box>}
         </Paper>
       </Box>}
     </Box>

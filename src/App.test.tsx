@@ -63,6 +63,11 @@ const output = {
   instructionCount: 1, disassembly: ['STOP'],
 };
 
+const ADDRESS = '0x1111111111111111111111111111111111111111';
+const BALANCE_ABI = JSON.stringify([
+  { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+]);
+
 describe('App', () => {
   beforeEach(() => {
     compileMock.mockReset();
@@ -71,6 +76,24 @@ describe('App', () => {
     localStorage.clear();
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  function toVisual() {
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+  }
+
+  /** Add a contract through the dialog and wait for its collapsed row. */
+  async function addContract(name = 'USDC', abi = BALANCE_ABI, address = ADDRESS) {
+    fireEvent.click(screen.getByRole('button', { name: '+ Add contract' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: address } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: abi } });
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+    await screen.findByRole('button', { name: `Expand ${name}` });
+  }
+
+  async function expandContract(name: string) {
+    fireEvent.click(screen.getByRole('button', { name: `Expand ${name}` }));
+  }
 
   it('compiles source and shows bytecode and disassembly', async () => {
     compileMock.mockResolvedValue(output);
@@ -126,7 +149,7 @@ describe('App', () => {
   it('switches between code and visual authoring modes', async () => {
     render(<App />);
     expect(screen.getByLabelText('LISA source editor')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    toVisual();
     expect(await screen.findByLabelText('Visual canvas')).toBeInTheDocument();
     expect(screen.queryByLabelText('LISA source editor')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Code' }));
@@ -134,16 +157,10 @@ describe('App', () => {
     expect(screen.queryByLabelText('Visual canvas')).not.toBeInTheDocument();
   });
 
-  it('adds a contract from the sidebar and creates a call node from a dropped function', async () => {
+  it('adds a contract from the library dialog and creates a call node from a dropped function', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
-    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
-      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
-    ]) } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
-    expect(await screen.findByText('balanceOf')).toBeInTheDocument();
+    toVisual();
+    await addContract();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
@@ -154,21 +171,56 @@ describe('App', () => {
     });
   });
 
-  it('rejects an invalid contract address in the sidebar', async () => {
+  it('keeps the add-contract dialog contained and rejects an invalid address', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    toVisual();
+    fireEvent.click(screen.getByRole('button', { name: '+ Add contract' }));
+    // The form only exists inside the dialog, not permanently in the panel.
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Bad' } });
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x123' } });
     fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: '[{"type":"function","name":"f","inputs":[],"outputs":[]}]' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
     expect(await screen.findByText(/20-byte hex/)).toBeInTheDocument();
-    expect(screen.getByText('No contracts yet. Add one to drag its functions onto the canvas.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByText('No contracts yet. Add one to place its functions on the canvas.')).toBeInTheDocument();
+  });
+
+  it('starts contracts collapsed and reveals searchable functions on expand', async () => {
+    render(<App />);
+    toVisual();
+    const abi = JSON.stringify([
+      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+      { type: 'function', name: 'transfer', stateMutability: 'nonpayable', inputs: [{ type: 'address' }, { type: 'uint256' }], outputs: [{ type: 'bool' }] },
+    ]);
+    await addContract('USDC', abi);
+    // Collapsed: functions are not rendered until the row expands.
+    expect(screen.queryByText('balanceOf')).not.toBeInTheDocument();
+    await expandContract('USDC');
+    expect(await screen.findByText('balanceOf')).toBeInTheDocument();
+    expect(screen.getByText('transfer')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Search functions in USDC'), { target: { value: 'trans' } });
+    expect(screen.queryByText('balanceOf')).not.toBeInTheDocument();
+    expect(screen.getByText('transfer')).toBeInTheDocument();
+  });
+
+  it('adds a call node by clicking a function in the library', async () => {
+    render(<App />);
+    toVisual();
+    await addContract();
+    await expandContract('USDC');
+    fireEvent.click(screen.getByRole('button', { name: 'balanceOf' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.nodes).toEqual([
+        { id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' },
+      ]);
+    });
   });
 
   it('compiles the visual graph and exposes read-only generated source', async () => {
     compileMock.mockResolvedValue(output);
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    toVisual();
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     await screen.findByLabelText('Compiled bytecode');
     fireEvent.click(screen.getByRole('tab', { name: 'Generated source' }));
@@ -178,14 +230,8 @@ describe('App', () => {
 
   it('shows graph-level errors without invoking the Worker', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
-    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
-      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
-    ]) } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
-    await screen.findByText('balanceOf');
+    toVisual();
+    await addContract();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     expect(await screen.findByText(/is missing an input/)).toBeInTheDocument();
@@ -194,7 +240,8 @@ describe('App', () => {
 
   it('creates nodes from the palette and edits the selected node', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    toVisual();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
@@ -209,16 +256,21 @@ describe('App', () => {
     });
   });
 
+  it('collapses the library to widen the canvas', async () => {
+    render(<App />);
+    toVisual();
+    expect(screen.getByRole('button', { name: '+ Add contract' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse library' }));
+    expect(screen.queryByRole('button', { name: '+ Add contract' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand library' }));
+    expect(screen.getByRole('button', { name: '+ Add contract' })).toBeInTheDocument();
+  });
+
   it('connects ports through the canvas', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
-    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
-      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
-    ]) } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
-    await screen.findByText('balanceOf');
+    toVisual();
+    await addContract();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
@@ -232,14 +284,9 @@ describe('App', () => {
 
   it('deletes nodes from the canvas with their edges', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
-    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
-      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
-    ]) } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
-    await screen.findByText('balanceOf');
+    toVisual();
+    await addContract();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
@@ -252,29 +299,40 @@ describe('App', () => {
     });
   });
 
+  it('collapses the output panel to a one-line summary', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    toVisual();
+    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
+    expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
+    expect(screen.getByText('idle')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await waitFor(() => expect(screen.getByText('✓ compiled · 1 bytes')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
+    expect(await screen.findByLabelText('Compiled bytecode')).toBeInTheDocument();
+  });
+
   it('invalidates compiled output when switching authoring modes', async () => {
     compileMock.mockResolvedValue(output);
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     await screen.findByLabelText('Compiled bytecode');
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    toVisual();
     expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
   });
 
   it('edits a contract address in place and updates every reference', async () => {
     compileMock.mockResolvedValue(output);
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
-    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
-      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
-    ]) } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
-    await screen.findByText('balanceOf');
+    toVisual();
+    await addContract();
+    await expandContract('USDC');
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect-ctx' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Contracts' }));
+    await expandContract('USDC');
     fireEvent.change(screen.getByLabelText('Address for USDC'), { target: { value: '0x2222222222222222222222222222222222222222' } });
     fireEvent.blur(screen.getByLabelText('Address for USDC'));
     await waitFor(() => {
@@ -289,22 +347,17 @@ describe('App', () => {
 
   it('keeps the stored address when an inline address edit is invalid', async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
-    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
-    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
-      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
-    ]) } });
-    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
-    await screen.findByText('balanceOf');
+    toVisual();
+    await addContract();
+    await expandContract('USDC');
     fireEvent.change(screen.getByLabelText('Address for USDC'), { target: { value: '0xnope' } });
     fireEvent.blur(screen.getByLabelText('Address for USDC'));
     expect(await screen.findByText(/20-byte hex/)).toBeInTheDocument();
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
-      expect(saved.visual.contracts[0].address).toBe('0x1111111111111111111111111111111111111111');
+      expect(saved.visual.contracts[0].address).toBe(ADDRESS);
     });
-    expect(screen.getByLabelText<HTMLInputElement>('Address for USDC').value).toBe('0x1111111111111111111111111111111111111111');
+    expect(screen.getByLabelText<HTMLInputElement>('Address for USDC').value).toBe(ADDRESS);
   });
 
   it('restores a saved visual project on load', () => {

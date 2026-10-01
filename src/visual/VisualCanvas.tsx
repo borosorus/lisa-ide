@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import {
   Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow,
   type Connection, type Edge, type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { LisaNode, nodeLabel, portsForNode } from './flowNodes';
+import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
 import type { Vec2, VisualProject } from './model';
 import { FUNCTION_MIME } from './ContractsPanel';
 
 const nodeTypes = { lisa: LisaNode };
+
+/** Lets the sidebar place click-added nodes in the visible viewport. */
+export interface CanvasApi {
+  viewportCenter(): Vec2 | null;
+}
 
 export interface VisualCanvasProps {
   project: VisualProject;
@@ -18,17 +23,22 @@ export interface VisualCanvasProps {
   onDeleteNodes(ids: string[]): void;
   onDeleteEdges(ids: string[]): void;
   onConnect(from: { node: string; port: string }, to: { node: string; port: string }): void;
+  /** Inline edit commit from a node card; semantics stay in the project layer. */
+  onPatchNode(id: string, fields: Record<string, unknown>): void;
   onSelectNode(id: string | null): void;
   onSelectEdge(id: string | null): void;
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
   /** Last added node; the view pans to keep new nodes discoverable. */
   focusNodeId?: string | null;
+  /** Host handle for click-to-add placement in the visible viewport. */
+  canvasApi?: React.MutableRefObject<CanvasApi | null>;
 }
 
 /**
  * Controlled projection of the semantic project. React Flow state is derived
- * on every render; only drops, drags, connections, and deletes flow back out.
+ * on every render; only drops, drags, connections, deletes, and inline edits
+ * flow back out.
  */
 export function VisualCanvas(props: VisualCanvasProps) {
   return <ReactFlowProvider>
@@ -37,14 +47,26 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, focusNodeId,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, focusNodeId, canvasApi,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
+  const hostRef = useRef<HTMLDivElement | null>(null);
+
+  const ownApiRef = useRef<CanvasApi | null>(null);
+  const apiRef = canvasApi ?? ownApiRef;
+  useImperativeHandle(apiRef, () => ({
+    viewportCenter: () => {
+      const rect = hostRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0) return null;
+      return screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+    },
+  }), [screenToFlowPosition]);
 
   /*
    * The project is canonical and React Flow is a controlled projection, so
    * xyflow's internal selection-based delete (which needs onNodesChange to
    * round-trip changes) is disabled; deletion follows our own selection.
+   * Focused form controls (inputs, selects) keep their keystrokes.
    */
   const deleteRef = useRef({ selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges });
   deleteRef.current = { selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges };
@@ -52,7 +74,8 @@ function Canvas({
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       const target = event.target as HTMLElement | null;
-      if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) return;
+      if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+          || target instanceof HTMLSelectElement || target.isContentEditable)) return;
       const selection = deleteRef.current;
       if (selection.selectedNodeId) {
         event.preventDefault();
@@ -66,15 +89,12 @@ function Canvas({
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const nodes = useMemo<Node[]>(() => project.nodes.map(node => {
-    const ports = portsForNode(node, project);
-    return {
-      id: node.id,
-      type: 'lisa',
-      position: project.positions[node.id] ?? { x: 0, y: 0 },
-      data: { kind: node.kind, label: nodeLabel(node, project), inputs: ports.inputs, outputs: ports.outputs },
-    };
-  }), [project]);
+  const nodes = useMemo<Node[]>(() => project.nodes.map(node => ({
+    id: node.id,
+    type: 'lisa',
+    position: project.positions[node.id] ?? { x: 0, y: 0 },
+    data: { node, project },
+  })), [project]);
 
   const edges = useMemo<Edge[]>(() => project.edges.map(edge => ({
     id: edge.id,
@@ -83,6 +103,8 @@ function Canvas({
     target: edge.to.node,
     targetHandle: edge.to.port,
   })), [project.edges]);
+
+  const editApi = useMemo<NodeEditApi>(() => ({ patch: onPatchNode }), [onPatchNode]);
 
   const nodesRef = useRef(project.nodes);
   nodesRef.current = project.nodes;
@@ -118,36 +140,38 @@ function Canvas({
     return !!sourcePort && !!targetPort && canConnect(sourcePort, targetPort);
   }, [project]);
 
-  return <div className="canvas-host" aria-label="Visual canvas"
+  return <div className="canvas-host" aria-label="Visual canvas" ref={hostRef}
     onDrop={onDrop} onDragOver={onDragOver}
   >
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      fitView
-      deleteKeyCode={null}
-      proOptions={{ hideAttribution: true }}
-      onNodeDragStop={(_, node, group) => onMoveNodes(Object.fromEntries(
-        [...(group ?? []), node].map(moved => [moved.id, moved.position] as const),
-      ))}
-      onNodesDelete={deleted => onDeleteNodes(deleted.map(node => node.id))}
-      onEdgesDelete={deleted => onDeleteEdges(deleted.map(edge => edge.id))}
-      onConnect={c => {
-        if (c.source && c.target) {
-          onConnect(
-            { node: c.source, port: c.sourceHandle ?? 'out' },
-            { node: c.target, port: c.targetHandle ?? 'in' },
-          );
-        }
-      }}
-      isValidConnection={isValidConnection}
-      onNodeClick={(_, node) => onSelectNode(node.id)}
-      onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
-      onPaneClick={() => { onSelectNode(null); onSelectEdge(null); }}
-    >
-      <Background color="#26354c" gap={24} />
-      <Controls showInteractive={false} />
-    </ReactFlow>
+    <NodeEditContext.Provider value={editApi}>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        fitView
+        deleteKeyCode={null}
+        proOptions={{ hideAttribution: true }}
+        onNodeDragStop={(_, node, group) => onMoveNodes(Object.fromEntries(
+          [...(group ?? []), node].map(moved => [moved.id, moved.position] as const),
+        ))}
+        onNodesDelete={deleted => onDeleteNodes(deleted.map(node => node.id))}
+        onEdgesDelete={deleted => onDeleteEdges(deleted.map(edge => edge.id))}
+        onConnect={c => {
+          if (c.source && c.target) {
+            onConnect(
+              { node: c.source, port: c.sourceHandle ?? 'out' },
+              { node: c.target, port: c.targetHandle ?? 'in' },
+            );
+          }
+        }}
+        isValidConnection={isValidConnection}
+        onNodeClick={(_, node) => onSelectNode(node.id)}
+        onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
+        onPaneClick={() => { onSelectNode(null); onSelectEdge(null); }}
+      >
+        <Background color="#26354c" gap={24} />
+        <Controls showInteractive={false} />
+      </ReactFlow>
+    </NodeEditContext.Provider>
   </div>;
 }

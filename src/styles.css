@@ -1,6 +1,8 @@
 html, body, #root { margin: 0; min-height: 100%; }
 body { background: #0b1220; }
 .app { min-height: 100vh; display: flex; flex-direction: column; }
+/* Visual mode owns the viewport: panes scroll internally, the page never grows. */
+.app-fixed { height: 100vh; min-height: 0; overflow: hidden; }
 .topbar { padding: 20px 24px; border-bottom: 1px solid #26354c; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; flex: 1; min-height: 0; }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 580px; overflow: hidden; border: 1px solid #26354c; }
@@ -9,29 +11,41 @@ body { background: #0b1220; }
 .output-content { padding: 20px; overflow: auto; flex: 1; }
 .hash { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #bdd4f1; overflow-wrap: anywhere; margin: 4px 0 16px; }
 .code-output { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: #dceaff; background: #101827; padding: 16px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 180px; max-height: 55vh; overflow: auto; }
-.visual-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; padding: 16px; flex: 1; min-height: 0; }
-.visual-workspace .canvas-pane { grid-row: 1; grid-column: 1; min-height: 480px; }
-.visual-workspace .side-pane { grid-row: 1; grid-column: 2; min-height: 480px; }
-.visual-workspace .output-pane { grid-row: 2; grid-column: 1 / -1; min-height: 260px; }
+.visual-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; padding: 16px; flex: 1; min-height: 0; }
+.visual-workspace.library-collapsed { grid-template-columns: minmax(0, 1fr) 46px; }
+.visual-workspace .pane { min-height: 0; }
+.visual-workspace .canvas-pane { grid-row: 1; grid-column: 1; }
+.visual-workspace .side-pane { grid-row: 1; grid-column: 2; }
+.visual-workspace .output-pane { grid-row: 2; grid-column: 1 / -1; max-height: 45vh; }
+.visual-workspace .side-pane .pane-heading { justify-content: space-between; }
 .canvas-host { flex: 1; min-height: 0; position: relative; background: #101827; }
 .canvas-host .react-flow__controls-button { background: #172236; border-bottom: 1px solid #26354c; fill: #bdd4f1; }
 .side-content { padding: 12px 16px; overflow: auto; flex: 1; }
 .side-section { border-top: 1px solid #26354c; padding-top: 10px; margin-top: 10px; }
 .function-item { padding: 5px 10px; margin-top: 4px; cursor: grab; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border-color: #3a4c68 !important; }
-.lisa-node { position: relative; min-width: 130px; background: #172236; border: 1px solid #3a4c68; border-radius: 8px; padding: 8px 10px; color: #dceaff; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.lisa-node { position: relative; width: 240px; background: #172236; border: 1px solid #3a4c68; border-radius: 8px; padding: 8px 10px 9px; color: #dceaff; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.lisa-node-call { width: 250px; }
+.lisa-node-context, .lisa-node-literal, .lisa-node-binary, .lisa-node-if { min-width: 160px; width: auto; }
 .lisa-node-if { border-style: dashed; border-color: #f6c177; }
-.lisa-node-body { display: flex; justify-content: space-between; gap: 10px; }
-.lisa-node-kind { color: #7790ad; text-transform: uppercase; font-size: 10px; }
-.port-row { position: absolute; display: flex; align-items: center; gap: 4px; }
-.port-row.left { left: -7px; }
-.port-row.right { right: -7px; flex-direction: row; }
-.port-label { font-size: 9px; color: #7790ad; white-space: nowrap; }
-.port-row.left .port-label { margin-left: 12px; }
-.port-row.right .port-label { margin-right: 12px; }
-.react-flow .port { width: 10px; height: 10px; border: 1px solid #0b1220; border-radius: 50%; }
+.node-head { display: flex; align-items: baseline; gap: 8px; min-height: 18px; }
+.node-kind { color: #7790ad; text-transform: uppercase; font-size: 10px; flex: none; }
+.node-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; min-height: 22px; }
+.node-row.left { justify-content: flex-start; }
+.node-row.right { justify-content: flex-end; }
+.node-row .react-flow__handle { position: static; margin: 0; }
+.port-label { font-size: 11px; color: #bdd4f1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.port-label.payable-value { color: #f6c177; }
+.port-label.unsupported { color: #6c7f99; }
+.node-if-label { color: #f6c177; font-size: 11px; }
+.node-select, .node-input { background: #101827; color: #dceaff; border: 1px solid #3a4c68; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 4px; max-width: 120px; }
+.node-input { width: 90px; }
+.node-input.invalid { border-color: #ef8f8f; }
+.node-select:focus, .node-input:focus { outline: 1px solid #8ebdff; }
+.react-flow .port { width: 11px; height: 11px; border: 1px solid #0b1220; border-radius: 50%; }
 .react-flow .port-value { background: #8ebdff; }
 .react-flow .port-address { background: #9fd89f; }
 .react-flow .port-bool { background: #ef8f8f; }
 .react-flow .port-condition { background: #f6c177; }
-.react-flow .port-result { background: #d9a7e7; }
-@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .visual-workspace { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; } .visual-workspace .canvas-pane { grid-row: auto; } .visual-workspace .side-pane { grid-row: auto; } }
+.react-flow .port-blocked { background: #3a4c68; border-style: dashed; }
+@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .app-fixed { height: auto; min-height: 100vh; overflow: visible; } .visual-workspace { grid-template-columns: 1fr; grid-template-rows: auto; } .visual-workspace.library-collapsed { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; grid-row: auto; } .visual-workspace .canvas-pane { height: 60vh; } .visual-workspace .side-pane { max-height: 50vh; } .visual-workspace .output-pane { max-height: none; } }
