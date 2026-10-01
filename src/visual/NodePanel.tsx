@@ -56,7 +56,10 @@ export function NodeInspector({ node, project, onChange }: {
       <SelectField label="Decode" value={node.decoder} options={[...WORD_DECODERS]}
         onChange={decoder => onChange({ decoder, offset: decoder === 'word' ? node.offset ?? 0 : undefined })} />
       {node.decoder === 'word' && <TextField size="small" label="Word byte offset" value={node.offset ?? 0}
-        onChange={e => onChange({ offset: Number(e.target.value) || 0 })} />}
+        onChange={e => {
+          const value = Math.max(0, Math.trunc(Number(e.target.value)));
+          onChange({ offset: Number.isSafeInteger(value) ? value : 0 });
+        }} />}
     </>}
 
     {node.kind === 'call' && <Typography variant="body2" color="text.secondary">

@@ -47,6 +47,14 @@ vi.mock('./visual/VisualCanvas', () => ({
       aria-label="simulate-connect"
       onClick={() => props.onConnect({ node: 'lit1', port: 'out' }, { node: 'call1', port: 'arg:0' })}
     />
+    <button
+      aria-label="simulate-connect-ctx"
+      onClick={() => props.onConnect({ node: 'ctx1', port: 'out' }, { node: 'call1', port: 'arg:0' })}
+    />
+    <button
+      aria-label="simulate-delete-first"
+      onClick={() => props.onDeleteNodes(props.project.nodes.slice(0, 1).map((n: { id: string }) => n.id))}
+    />
   </>,
 }));
 
@@ -220,6 +228,83 @@ describe('App', () => {
         { id: 'e1', from: { node: 'lit1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
       ]);
     });
+  });
+
+  it('deletes nodes from the canvas with their edges', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
+      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+    ]) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    await screen.findByText('balanceOf');
+    fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
+    await waitFor(() => expect((JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.edges)).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-delete-first' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.nodes).toEqual([{ id: 'call1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' }]);
+      expect(saved.visual.edges).toEqual([]);
+    });
+  });
+
+  it('invalidates compiled output when switching authoring modes', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
+  });
+
+  it('edits a contract address in place and updates every reference', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
+      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+    ]) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    await screen.findByText('balanceOf');
+    fireEvent.click(screen.getByRole('button', { name: 'Context' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-connect-ctx' }));
+    fireEvent.change(screen.getByLabelText('Address for USDC'), { target: { value: '0x2222222222222222222222222222222222222222' } });
+    fireEvent.blur(screen.getByLabelText('Address for USDC'));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.contracts[0].address).toBe('0x2222222222222222222222222222222222222222');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    fireEvent.click(screen.getByRole('tab', { name: 'Generated source' }));
+    expect(screen.getByLabelText('Generated source')).toHaveTextContent('0x2222222222222222222222222222222222222222');
+  });
+
+  it('keeps the stored address when an inline address edit is invalid', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
+      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+    ]) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    await screen.findByText('balanceOf');
+    fireEvent.change(screen.getByLabelText('Address for USDC'), { target: { value: '0xnope' } });
+    fireEvent.blur(screen.getByLabelText('Address for USDC'));
+    expect(await screen.findByText(/20-byte hex/)).toBeInTheDocument();
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.contracts[0].address).toBe('0x1111111111111111111111111111111111111111');
+    });
+    expect(screen.getByLabelText<HTMLInputElement>('Address for USDC').value).toBe('0x1111111111111111111111111111111111111111');
   });
 
   it('restores a saved visual project on load', () => {

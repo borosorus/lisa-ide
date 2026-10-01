@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow,
   type Connection, type Edge, type Node,
@@ -19,6 +19,9 @@ export interface VisualCanvasProps {
   onDeleteEdges(ids: string[]): void;
   onConnect(from: { node: string; port: string }, to: { node: string; port: string }): void;
   onSelectNode(id: string | null): void;
+  onSelectEdge(id: string | null): void;
+  selectedNodeId: string | null;
+  selectedEdgeId: string | null;
   /** Last added node; the view pans to keep new nodes discoverable. */
   focusNodeId?: string | null;
 }
@@ -34,9 +37,34 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onSelectNode, focusNodeId,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, focusNodeId,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
+
+  /*
+   * The project is canonical and React Flow is a controlled projection, so
+   * xyflow's internal selection-based delete (which needs onNodesChange to
+   * round-trip changes) is disabled; deletion follows our own selection.
+   */
+  const deleteRef = useRef({ selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges });
+  deleteRef.current = { selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)) return;
+      const selection = deleteRef.current;
+      if (selection.selectedNodeId) {
+        event.preventDefault();
+        selection.onDeleteNodes([selection.selectedNodeId]);
+      } else if (selection.selectedEdgeId) {
+        event.preventDefault();
+        selection.onDeleteEdges([selection.selectedEdgeId]);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const nodes = useMemo<Node[]>(() => project.nodes.map(node => {
     const ports = portsForNode(node, project);
@@ -96,11 +124,11 @@ function Canvas({
       edges={edges}
       nodeTypes={nodeTypes}
       fitView
-      deleteKeyCode={['Backspace', 'Delete']}
+      deleteKeyCode={null}
       proOptions={{ hideAttribution: true }}
       onNodeDragStop={(_, node) => onMoveNodes({ [node.id]: node.position })}
-      onNodesDelete={ids => onDeleteNodes(ids.filter(id => typeof id === 'string'))}
-      onEdgesDelete={ids => onDeleteEdges(ids.filter(id => typeof id === 'string'))}
+      onNodesDelete={deleted => onDeleteNodes(deleted.map(node => node.id))}
+      onEdgesDelete={deleted => onDeleteEdges(deleted.map(edge => edge.id))}
       onConnect={c => {
         if (c.source && c.target) {
           onConnect(
@@ -111,7 +139,8 @@ function Canvas({
       }}
       isValidConnection={isValidConnection}
       onNodeClick={(_, node) => onSelectNode(node.id)}
-      onPaneClick={() => onSelectNode(null)}
+      onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
+      onPaneClick={() => { onSelectNode(null); onSelectEdge(null); }}
     >
       <Background color="#26354c" gap={24} />
       <Controls showInteractive={false} />

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Box, Button, Divider, Paper, Stack, TextField, Typography } from '@mui/material';
 import { isValidAddress, parseAbiJson } from './abi';
 import { isReadFunction, type ContractFunction, type ContractResource } from './model';
@@ -8,10 +8,11 @@ export const FUNCTION_MIME = 'application/lisa-function';
 interface Props {
   contracts: readonly ContractResource[];
   onAddContract: (contract: { name: string; address: string; functions: readonly ContractFunction[] }) => void;
+  onUpdateContract: (id: string, patch: Partial<Pick<ContractResource, 'name' | 'address'>>) => void;
   onRemoveContract: (id: string) => void;
 }
 
-export function ContractsPanel({ contracts, onAddContract, onRemoveContract }: Props) {
+export function ContractsPanel({ contracts, onAddContract, onUpdateContract, onRemoveContract }: Props) {
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [abi, setAbi] = useState('');
@@ -50,28 +51,63 @@ export function ContractsPanel({ contracts, onAddContract, onRemoveContract }: P
     <Button variant="outlined" size="small" onClick={submit}>Add contract</Button>
     {contracts.length > 0 && <Divider sx={{ my: 0.5 }} />}
     {contracts.map(contract => (
-      <Box key={contract.id}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
-          <Typography variant="subtitle2">{contract.name}</Typography>
-          <Button size="small" color="inherit" aria-label={`Remove ${contract.name}`} onClick={() => onRemoveContract(contract.id)}>
-            Remove
-          </Button>
-        </Stack>
-        <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
-          {contract.address}
-        </Typography>
-        <FunctionGroup label="Reads" functions={contract.functions.filter(isReadFunction)} contractId={contract.id} />
-        <FunctionGroup
-          label="Writes"
-          functions={contract.functions.filter(f => !isReadFunction(f))}
-          contractId={contract.id}
-        />
-      </Box>
+      <ContractRow
+        key={contract.id}
+        contract={contract}
+        onPatch={onUpdateContract}
+        onRemove={onRemoveContract}
+      />
     ))}
     {contracts.length === 0 && (
       <Typography variant="body2" color="text.secondary">No contracts yet. Add one to drag its functions onto the canvas.</Typography>
     )}
   </Stack>;
+}
+
+function ContractRow({ contract, onPatch, onRemove }: {
+  contract: ContractResource;
+  onPatch: (id: string, patch: Partial<Pick<ContractResource, 'name' | 'address'>>) => void;
+  onRemove: (id: string) => void;
+}) {
+  const [text, setText] = useState(contract.address);
+  const [error, setError] = useState('');
+  useEffect(() => setText(contract.address), [contract.address]);
+
+  function commit() {
+    if (text === contract.address) return;
+    const trimmed = text.trim();
+    if (!isValidAddress(trimmed)) {
+      setError('Address must be 20-byte hex.');
+      setText(contract.address);
+      return;
+    }
+    setError('');
+    onPatch(contract.id, { address: trimmed });
+  }
+
+  return <Box>
+    <Stack direction="row" alignItems="center" justifyContent="space-between">
+      <Typography variant="subtitle2">{contract.name}</Typography>
+      <Button size="small" color="inherit" aria-label={`Remove ${contract.name}`} onClick={() => onRemove(contract.id)}>
+        Remove
+      </Button>
+    </Stack>
+    <TextField
+      size="small"
+      value={text}
+      onChange={event => { setText(event.target.value); setError(''); }}
+      onBlur={commit}
+      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commit(); } }}
+      error={error.length > 0}
+      helperText={error}
+      fullWidth
+      slotProps={{
+        htmlInput: { 'aria-label': `Address for ${contract.name}`, style: { fontFamily: 'monospace', wordBreak: 'break-all' } },
+      }}
+    />
+    <FunctionGroup label="Reads" functions={contract.functions.filter(isReadFunction)} contractId={contract.id} />
+    <FunctionGroup label="Writes" functions={contract.functions.filter(f => !isReadFunction(f))} contractId={contract.id} />
+  </Box>;
 }
 
 function FunctionGroup({ label, functions, contractId }: {

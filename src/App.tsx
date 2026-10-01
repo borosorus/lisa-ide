@@ -12,7 +12,8 @@ import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas } from './visual/VisualCanvas';
 import {
-  addContract, addNode, connectPort, removeContract, removeEdge, removeNodes, setNodeParent, setNodePosition, updateNode,
+  addContract, addNode, connectPort, removeContract, removeEdge, removeNodes,
+  setNodeParent, setNodePosition, updateContract, updateNode,
 } from './visual/projectState';
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type Vec2, type VisualProject } from './visual/model';
 import { NodeInspector, VisualPalette } from './visual/NodePanel';
@@ -51,6 +52,7 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [generated, setGenerated] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const client = useRef<CompilerClient | null>(null);
   const revision = useRef(0);
@@ -63,41 +65,37 @@ export default function App() {
       setNotice(nextNotice);
       return;
     }
-    revision.current++;
+    invalidateOutput();
     setSource(next);
+    setNotice(nextNotice);
+  }
+
+  function invalidateOutput() {
+    revision.current++;
+    client.current?.cancel();
     setOutput(null);
     setImportedArtifact(null);
     setError(null);
-    setNotice(nextNotice);
     setGenerated('');
-    client.current?.cancel();
     setBusy(false);
   }
 
   /** Semantic graph edits invalidate compiled output; position edits do not. */
-  function editVisual(next: VisualProject, positional = false) {
-    if (!positional) {
-      revision.current++;
-      client.current?.cancel();
-      setOutput(null);
-      setError(null);
-      setImportedArtifact(null);
-      setGenerated('');
-      setBusy(false);
-    }
-    setProject(next);
+  function editVisual(transform: VisualProject | ((prev: VisualProject) => VisualProject), positional = false) {
+    if (!positional) invalidateOutput();
+    setProject(prev => typeof transform === 'function' ? transform(prev) : transform);
   }
 
   function addCallNode(contractId: string, signature: string, position: Vec2) {
     const id = createId(project.nodes.map(n => n.id), 'call');
     setFocusNodeId(id);
-    editVisual(addNode(project, { id, kind: 'call', contractId, signature }, position));
+    editVisual(p => addNode(p, { id, kind: 'call', contractId, signature }, position));
   }
 
   function moveNodes(changes: Readonly<Record<string, Vec2>>) {
-    editVisual(Object.entries(changes).reduce(
+    editVisual(p => Object.entries(changes).reduce(
       (next, [id, position]) => setNodePosition(next, id, position),
-      project,
+      p,
     ), true);
   }
 
@@ -106,15 +104,16 @@ export default function App() {
     const count = project.nodes.length;
     const position = { x: 60 + (count % 5) * 220, y: 60 + Math.floor(count / 5) * 160 };
     setFocusNodeId(id);
-    editVisual(addNode(project, { ...partial, id } as GraphNode, position));
+    editVisual(p => addNode(p, { ...partial, id } as GraphNode, position));
   }
 
   function editSelectedNode(patch: Record<string, unknown>) {
     if (!selectedId) return;
     if ('parent' in patch) {
-      editVisual(setNodeParent(project, selectedId, patch.parent as string | undefined));
+      const parent = patch.parent as string | undefined;
+      editVisual(p => setNodeParent(p, selectedId, parent));
     } else {
-      editVisual(updateNode(project, selectedId, patch));
+      editVisual(p => updateNode(p, selectedId, patch));
     }
   }
 
@@ -219,7 +218,12 @@ export default function App() {
           <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
         </Box>
         <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end" alignItems="center">
-          <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => { if (next) { setMode(next); setGenerated(''); } }} aria-label="Authoring mode">
+          <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => {
+            if (next && next !== mode) {
+              invalidateOutput();
+              setMode(next);
+            }
+          }} aria-label="Authoring mode">
             <ToggleButton value="code">Code</ToggleButton>
             <ToggleButton value="visual">Visual</ToggleButton>
           </ToggleButtonGroup>
@@ -287,11 +291,17 @@ export default function App() {
             onAddCallNode={addCallNode}
             onDeleteNodes={ids => {
               if (selectedId && ids.includes(selectedId)) setSelectedId(null);
-              editVisual(removeNodes(project, ids));
+              editVisual(p => removeNodes(p, ids));
             }}
-            onDeleteEdges={ids => editVisual(ids.reduce(removeEdge, project))}
-            onConnect={(from, to) => editVisual(connectPort(project, { from, to }))}
-            onSelectNode={setSelectedId}
+            onDeleteEdges={ids => {
+              if (selectedEdgeId && ids.includes(selectedEdgeId)) setSelectedEdgeId(null);
+              editVisual(p => ids.reduce(removeEdge, p));
+            }}
+            onConnect={(from, to) => editVisual(p => connectPort(p, { from, to }))}
+            onSelectNode={id => { setSelectedId(id); if (id !== null) setSelectedEdgeId(null); }}
+            onSelectEdge={id => { setSelectedEdgeId(id); if (id !== null) setSelectedId(null); }}
+            selectedNodeId={selectedId}
+            selectedEdgeId={selectedEdgeId}
             focusNodeId={focusNodeId}
           />
         </Paper>
@@ -300,8 +310,9 @@ export default function App() {
           <Box className="side-content">
             <ContractsPanel
               contracts={project.contracts}
-              onAddContract={contract => editVisual(addContract(project, contract))}
-              onRemoveContract={id => editVisual(removeContract(project, id))}
+              onAddContract={contract => editVisual(p => addContract(p, contract))}
+              onUpdateContract={(id, patch) => editVisual(p => updateContract(p, id, patch))}
+              onRemoveContract={id => editVisual(p => removeContract(p, id))}
             />
             <Box className="side-section">
               <VisualPalette onAdd={addVisualNode} />
