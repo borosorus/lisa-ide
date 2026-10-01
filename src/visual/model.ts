@@ -65,6 +65,10 @@ export interface GraphEndpoint {
   readonly port: string;
 }
 
+/** A new node without its id yet (distributes over the node union). */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+export type GraphNodeDraft = DistributiveOmit<GraphNode, 'id'>;
+
 export interface GraphEdge {
   readonly id: string;
   readonly from: GraphEndpoint;

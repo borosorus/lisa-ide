@@ -1,6 +1,6 @@
 import {
   createId,
-  type ContractResource, type GraphEdge, type Vec2, type VisualProject,
+  type ContractResource, type GraphEdge, type GraphNode, type Vec2, type VisualProject,
 } from './model';
 
 /**
@@ -87,6 +87,20 @@ function dropNodes(project: VisualProject, ids: string[]): VisualProject {
 export function addEdge(project: VisualProject, edge: Omit<GraphEdge, 'id'>): VisualProject {
   const id = createId(project.edges.map(e => e.id), 'e');
   return { ...project, edges: [...project.edges, { ...edge, id }] };
+}
+
+/** Connect a source port to an input port, replacing any existing driver. */
+export function connectPort(project: VisualProject, edge: Omit<GraphEdge, 'id'>): VisualProject {
+  const without = project.edges.filter(e => e.to.node !== edge.to.node || e.to.port !== edge.to.port);
+  return addEdge({ ...project, edges: without }, edge);
+}
+
+/** Patch editable node fields; identity (id/kind/parent) stays stable. */
+export function updateNode(project: VisualProject, id: string, patch: Record<string, unknown>): VisualProject {
+  return {
+    ...project,
+    nodes: project.nodes.map(n => (n.id === id ? { ...n, ...patch, id: n.id, kind: n.kind } as GraphNode : n)),
+  };
 }
 
 export function removeEdge(project: VisualProject, id: string): VisualProject {

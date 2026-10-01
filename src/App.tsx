@@ -12,9 +12,10 @@ import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas } from './visual/VisualCanvas';
 import {
-  addContract, addNode, removeContract, removeNodes, setNodePosition,
+  addContract, addNode, connectPort, removeContract, removeEdge, removeNodes, setNodeParent, setNodePosition, updateNode,
 } from './visual/projectState';
-import { createId, emptyProject, type Vec2, type VisualProject } from './visual/model';
+import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type Vec2, type VisualProject } from './visual/model';
+import { NodeInspector, VisualPalette } from './visual/NodePanel';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import './styles.css';
 
@@ -49,6 +50,7 @@ export default function App() {
   const [tab, setTab] = useState(0);
   const [notice, setNotice] = useState('');
   const [generated, setGenerated] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const client = useRef<CompilerClient | null>(null);
   const revision = useRef(0);
 
@@ -95,6 +97,22 @@ export default function App() {
       (next, [id, position]) => setNodePosition(next, id, position),
       project,
     ), true);
+  }
+
+  function addVisualNode(partial: GraphNodeDraft, prefix: string) {
+    const id = createId(project.nodes.map(n => n.id), prefix);
+    const count = project.nodes.length;
+    const position = { x: 60 + (count % 5) * 220, y: 60 + Math.floor(count / 5) * 160 };
+    editVisual(addNode(project, { ...partial, id } as GraphNode, position));
+  }
+
+  function editSelectedNode(patch: Record<string, unknown>) {
+    if (!selectedId) return;
+    if ('parent' in patch) {
+      editVisual(setNodeParent(project, selectedId, patch.parent as string | undefined));
+    } else {
+      editVisual(updateNode(project, selectedId, patch));
+    }
   }
 
   async function compile() {
@@ -264,7 +282,13 @@ export default function App() {
             project={project}
             onMoveNodes={moveNodes}
             onAddCallNode={addCallNode}
-            onDeleteNodes={ids => editVisual(removeNodes(project, ids))}
+            onDeleteNodes={ids => {
+              if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+              editVisual(removeNodes(project, ids));
+            }}
+            onDeleteEdges={ids => editVisual(ids.reduce(removeEdge, project))}
+            onConnect={(from, to) => editVisual(connectPort(project, { from, to }))}
+            onSelectNode={setSelectedId}
           />
         </Paper>
         <Paper className="pane side-pane" elevation={0}>
@@ -275,6 +299,19 @@ export default function App() {
               onAddContract={contract => editVisual(addContract(project, contract))}
               onRemoveContract={id => editVisual(removeContract(project, id))}
             />
+            <Box className="side-section">
+              <VisualPalette onAdd={addVisualNode} />
+            </Box>
+            <Box className="side-section">
+              <Typography variant="subtitle2">Selected node</Typography>
+              <Box sx={{ mt: 0.5 }}>
+                <NodeInspector
+                  node={project.nodes.find(n => n.id === selectedId) ?? null}
+                  project={project}
+                  onChange={editSelectedNode}
+                />
+              </Box>
+            </Box>
           </Box>
         </Paper>
         <Paper className="pane output-pane" elevation={0}>

@@ -36,14 +36,16 @@ vi.mock('./editor/SourceEditor', () => ({
   </>,
 }));
 vi.mock('./visual/VisualCanvas', () => ({
-  VisualCanvas: (props: {
-    project: { contracts: { id: string }[] };
-    onAddCallNode: (contractId: string, signature: string, position: { x: number; y: number }) => void;
-  }) => <>
+  VisualCanvas: (props: Record<string, any>) => <>
     <div aria-label="Visual canvas" />
     <button
       aria-label="simulate-drop"
       onClick={() => props.onAddCallNode(props.project.contracts[0]?.id ?? 'missing', 'balanceOf(address)', { x: 10, y: 20 })}
+    />
+    <button aria-label="simulate-select-first" onClick={() => props.onSelectNode(props.project.nodes[0]?.id ?? null)} />
+    <button
+      aria-label="simulate-connect"
+      onClick={() => props.onConnect({ node: 'lit1', port: 'out' }, { node: 'call1', port: 'arg:0' })}
     />
   </>,
 }));
@@ -180,5 +182,43 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     expect(await screen.findByText(/is missing an input/)).toBeInTheDocument();
     expect(compileMock).not.toHaveBeenCalled();
+  });
+
+  it('creates nodes from the palette and edits the selected node', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Context' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.nodes).toEqual([{ id: 'ctx1', kind: 'context', name: 'SELF' }]);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-select-first' }));
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(await screen.findByRole('option', { name: 'CALLER' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.nodes[0].name).toBe('CALLER');
+    });
+  });
+
+  it('connects ports through the canvas', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'USDC' } });
+    fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x1111111111111111111111111111111111111111' } });
+    fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: JSON.stringify([
+      { type: 'function', name: 'balanceOf', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+    ]) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
+    await screen.findByText('balanceOf');
+    fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.edges).toEqual([
+        { id: 'e1', from: { node: 'lit1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+      ]);
+    });
   });
 });

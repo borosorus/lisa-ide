@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { emptyProject, type VisualProject } from './model';
 import {
-  addContract, addEdge, addNode, removeContract, removeEdge, removeNodes,
-  setNodeParent, setNodePosition, updateContract,
+  addContract, addEdge, addNode, connectPort, removeContract, removeEdge, removeNodes,
+  setNodeParent, setNodePosition, updateContract, updateNode,
 } from './projectState';
 
 const ADDRESS = '0x1111111111111111111111111111111111111111';
@@ -89,5 +89,23 @@ describe('nodes', () => {
     expect(p.nodes.find(n => n.id === 'lit1')).toEqual({ id: 'lit1', kind: 'literal', literalType: 'uint', literal: '7', parent: 'if1' });
     p = setNodeParent(p, 'lit1', undefined);
     expect(p.nodes.find(n => n.id === 'lit1')).not.toHaveProperty('parent');
+  });
+
+  it('connectPort replaces the existing driver of an input port', () => {
+    let p = emptyProject();
+    p = addNode(p, { id: 'a', kind: 'context', name: 'SELF' }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'b', kind: 'context', name: 'CALLER' }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'call', kind: 'call', contractId: 'c1', signature: 'f(address)' }, { x: 0, y: 0 });
+    p = addEdge(p, { from: { node: 'a', port: 'out' }, to: { node: 'call', port: 'arg:0' } });
+    p = connectPort(p, { from: { node: 'b', port: 'out' }, to: { node: 'call', port: 'arg:0' } });
+    expect(p.edges).toHaveLength(1);
+    expect(p.edges[0].from.node).toBe('b');
+  });
+
+  it('updateNode edits fields but not identity', () => {
+    let p = emptyProject();
+    p = addNode(p, { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1', parent: 'if1' }, { x: 0, y: 0 });
+    p = updateNode(p, 'lit1', { literal: '42' });
+    expect(p.nodes[0]).toEqual({ id: 'lit1', kind: 'literal', literalType: 'uint', literal: '42', parent: 'if1' });
   });
 });
