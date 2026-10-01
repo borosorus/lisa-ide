@@ -57,7 +57,11 @@ export default function App() {
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [libraryTab, setLibraryTab] = useState(0);
   const [libraryOpen, setLibraryOpen] = useState(true);
-  const [outputOpen, setOutputOpen] = useState(true);
+  // Visual mode gives the canvas the space: Output starts collapsed there.
+  const [outputOpen, setOutputOpen] = useState(stored.mode !== 'visual');
+  useEffect(() => { setOutputOpen(mode !== 'visual'); }, [mode]);
+  // Errors are otherwise invisible behind a collapsed panel; open to reveal.
+  useEffect(() => { if (error) setOutputOpen(true); }, [error]);
   const client = useRef<CompilerClient | null>(null);
   const canvasApi = useRef<CanvasApi | null>(null);
   const revision = useRef(0);

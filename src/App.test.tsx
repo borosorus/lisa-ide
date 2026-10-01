@@ -81,6 +81,12 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
   }
 
+  /** Visual mode collapses Output by default; content assertions expand it. */
+  function openOutput() {
+    const toggle = screen.getByRole('button', { name: /Output/, expanded: false });
+    fireEvent.click(toggle);
+  }
+
   /** Add a contract through the dialog and wait for its collapsed row. */
   async function addContract(name = 'USDC', abi = BALANCE_ABI, address = ADDRESS) {
     fireEvent.click(screen.getByRole('button', { name: '+ Add contract' }));
@@ -236,6 +242,7 @@ describe('App', () => {
     render(<App />);
     toVisual();
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    openOutput();
     await screen.findByLabelText('Compiled bytecode');
     fireEvent.click(screen.getByRole('tab', { name: 'Generated source' }));
     expect(screen.getByLabelText('Generated source')).toHaveTextContent('createProgram');
@@ -317,8 +324,7 @@ describe('App', () => {
     compileMock.mockResolvedValue(output);
     render(<App />);
     toVisual();
-    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
-    expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Output/, expanded: false })).toBeInTheDocument();
     expect(screen.getByText('idle')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     await waitFor(() => expect(screen.getByText('✓ compiled · 1 bytes')).toBeInTheDocument());
@@ -332,6 +338,16 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     await screen.findByLabelText('Compiled bytecode');
     toVisual();
+    expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
+  });
+
+  it('starts visual mode with the output collapsed', async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null, visual: { nodes: [], edges: [], contracts: [], positions: {} },
+    }));
+    render(<App />);
+    expect(screen.getByLabelText('Visual canvas')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Output/, expanded: false })).toBeInTheDocument();
     expect(screen.queryByLabelText('Compiled bytecode')).not.toBeInTheDocument();
   });
 
@@ -354,6 +370,7 @@ describe('App', () => {
       expect(saved.visual.contracts[0].address).toBe('0x2222222222222222222222222222222222222222');
     });
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    openOutput();
     await screen.findByLabelText('Compiled bytecode');
     fireEvent.click(screen.getByRole('tab', { name: 'Generated source' }));
     expect(screen.getByLabelText('Generated source')).toHaveTextContent('0x2222222222222222222222222222222222222222');
