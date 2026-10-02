@@ -1,343 +1,230 @@
-# AGENTS.md — LISA IDE v2 Final Interaction Pass
+# AGENTS.md — LISA IDE v2 Final Fixes
 
 ## Goal
 
-Finish the visual editor by improving IF ergonomics, graph feedback, and small canvas interactions.
+Finish v2 with a very small final correctness pass.
 
 Do not add new visual-language features.
 
-Do not add visual project import/export.
+Do not add browser-testing instructions.
 
-Do not add wallet execution, simulation, or Intereth integration in this branch.
+Do not add visual project import/export, wallet execution, simulation, explorer integration, or Intereth work.
 
-The remaining work should focus on:
+The branch is functionally complete. The remaining work is:
 
-- persistent/resizable IF frames
-- automatic IF expansion
-- IF-aware node spawning
-- graph diagnostics directly on the canvas
-- small selection/port/spawn polish
-- preserving existing deterministic semantics and ABI-output behavior
+1. make drag/drop creation containment-aware
+2. make nested IF depth calculation independent of node array order
+3. optionally apply a few tiny accessibility/selection polish items if they stay small
 
-The semantic graph remains canonical. React Flow remains presentation only.
+After that, freeze v2.
 
 ---
 
-## 1. Persistent IF frame size
+## 1. Drag/drop contract functions must respect IF containment
 
-The current IF frame is derived too tightly from its children, which makes editing cramped.
+Current click-to-add behavior is correct:
 
-Change IF presentation so the container has its own persistent visual size.
+- selected IF -> spawn inside the IF
+- semantic `parent` is assigned explicitly
+- placement uses IF-aware collision handling
 
-This size is presentation metadata only and must never affect lowering or execution order.
+Drag/drop must have equivalent semantic behavior.
 
-Recommended shape:
+### Problem
 
-```ts
-interface IfFrameSize {
-  width: number;
-  height: number;
-}
-```
+A contract function dropped visually inside an IF currently goes through the generic call-node path and can remain top-level semantically.
 
-Store this separately from semantic node data, alongside other presentation state.
+That creates a mismatch between what the canvas shows and what the generated program means.
 
-A new IF should start with a comfortable default size, roughly in the range of:
+### Required behavior
 
-- width: ~420px
-- height: ~260px
+When a function is dropped on the canvas:
 
-Exact values may be adjusted to fit the current visual design.
+1. convert the drop point to flow coordinates
+2. determine whether the drop lands inside an IF body
+3. choose the deepest valid IF when multiple IFs overlap
+4. create the call node with that semantic `parent`
+5. place it at or near the drop point
+6. preserve collision handling where practical
+7. if no IF contains the drop, create it at top level
 
-The frame should not automatically shrink when children move.
+Use the same containment rules already used for dragged existing nodes.
 
----
+Do not infer semantics from React Flow parent state alone.
 
-## 2. Resizable IF containers
+The semantic `parent` field remains authoritative.
 
-Users should be able to resize IF containers directly on the canvas.
+### Important
 
-Use React Flow resize facilities if they fit cleanly, but keep the resulting dimensions in project presentation metadata rather than in React Flow-only state.
+Do not route drag/drop through a path that silently ignores containment.
 
-Requirements:
-
-- resize handle should be obvious but unobtrusive
-- resizing must not change semantics
-- child positions remain stable
-- resizing a frame must not affect generated source
-- nested IFs remain supported
-- minimum size must preserve a visible header/body area
-
-Do not introduce a general layout engine.
+Prefer one shared creation helper where possible so click-to-add and drag/drop cannot drift semantically.
 
 ---
 
-## 3. Automatic IF expansion
+## 2. Nested IF depth must not depend on array order
 
-When a child approaches or crosses the right/bottom bounds of its IF, expand the frame automatically so the child remains comfortably inside.
+Review `iframes()` and any related containment helpers.
 
-Use padding around children.
+### Problem
 
-Preferred behavior:
+IF depth currently depends on previously computed parent depth values. If nested IF nodes are stored in child-before-parent order, depth can be wrong.
 
-- moving a child outward can grow the IF
-- growth should be smooth/predictable
-- the IF never auto-shrinks
-- nested IFs should propagate necessary growth outward if needed
-- simple movement inside existing bounds should not resize the frame
+Depth affects:
 
-Avoid making the user repeatedly push nodes around just to create room.
+- deepest-container hit testing
+- nested IF precedence
+- inside-out frame computation
 
----
+### Required behavior
 
-## 4. IF-aware node spawning
+Compute each IF depth independently by walking its semantic parent chain.
 
-When an IF is selected, adding a node should prefer spawning it inside that IF.
-
-This should apply to:
-
-- palette nodes
-- click-to-add contract functions
-
-Use the existing collision-free spawn strategy, but scope the search to the IF body first.
-
-Behavior:
-
-1. determine selected IF
-2. search for a free slot inside its body
-3. if needed, expand the IF
-4. assign the new node's semantic `parent`
-5. place it at the chosen presentation position
-
-If no IF is selected, keep the current viewport-centered spawn behavior.
-
-Do not infer IF membership from arbitrary screen overlap during creation; assign it explicitly based on selected IF context.
-
----
-
-## 5. Keep drag containment simple
-
-Existing drag-into / drag-out IF behavior should remain.
-
-Do not make containment depend on pixel-perfect boundaries.
-
-Keep the current principle:
-
-- semantic `parent` is authoritative
-- React Flow grouping mirrors it
-- dragging into an IF updates `parent`
-- dragging out clears/changes `parent`
-
-The new persistent frame size should improve this interaction by giving users more room.
-
----
-
-## 6. Optional “Fit contents”
-
-A small `Fit contents` action may be added for IF containers if it remains simple.
-
-It should:
-
-- resize the IF around its semantic descendants
-- include comfortable padding
-- never move children
-- never change semantics
-
-This is optional.
-
-Do not spend significant complexity on it.
-
----
-
-## 7. Graph diagnostics on canvas
-
-Use the existing graph validation diagnostics to show errors where they occur.
-
-Do not rely only on the Output panel.
-
-Map `GraphDiagnostic.node` and `GraphDiagnostic.port` to visible canvas feedback.
-
-Preferred visual feedback:
-
-- invalid node: clear error outline
-- invalid/missing port: error-colored handle/row
-- selected invalid node: concise diagnostic text
-- tooltip/title for additional detail if useful
-
-Examples:
-
-- missing call argument
-- invalid connection type
-- missing contract/function
-- scope violation
-- containment cycle
-- unconnected required input
-
-The user should be able to identify the broken node without reading an opaque global error such as `call3: input missing`.
-
-Keep the Output panel as the full diagnostic summary.
-
----
-
-## 8. Validation flow
-
-Validation should remain pure and reusable.
-
-Do not push validation logic into React components.
-
-Preferred flow:
+Example:
 
 ```text
-project
-  ↓
-validateProject()
-  ↓
-GraphDiagnostic[]
-  ├─ canvas highlighting
-  └─ compile error summary
+ifA
+  └─ ifB
+      └─ ifC
 ```
 
-Avoid maintaining a second UI-specific validation system.
+Depths must always be:
+
+```text
+ifA = 0
+ifB = 1
+ifC = 2
+```
+
+regardless of node array order.
+
+The calculation must be:
+
+- deterministic
+- cycle-safe
+- independent of presentation positions
+- independent of creation order
+
+After depth is known, inside-out frame calculation may sort by depth descending.
+
+Add regression tests with intentionally reversed/shuffled node order.
 
 ---
 
-## 9. Selection polish
+## 3. Preserve current architecture
 
-Make selected state clearer.
+Keep these boundaries intact:
 
-A selected node should be visually distinct from:
+```text
+semantic graph
+  ├─ parent / dependencies / contracts
+  │
+presentation metadata
+  ├─ positions
+  └─ IF frame sizes
+  │
+React Flow projection
+```
 
-- normal nodes
-- invalid nodes
-- IF containers
+Do not let:
 
-If a node is both selected and invalid, both states should remain understandable.
+- positions affect lowering
+- frame sizes affect lowering
+- React Flow parent state become canonical
+- drag/drop UI state bypass project transitions
 
-Keep the styling subtle and consistent with the existing dark theme.
-
----
-
-## 10. Port polish
-
-Make port states clearer without adding clutter.
-
-Useful distinctions:
-
-- normal connectable
-- selected/active connection target if available naturally
-- invalid/missing input
-- unsupported ABI output
-- disabled/non-connectable
-
-Do not add a large permanent legend unless the current UI clearly needs one.
-
-Prefer self-explanatory row labels and tooltips.
+`generateVisualSource()` should remain unaware of IF geometry.
 
 ---
 
-## 11. Better spawn size estimation
+## 4. Preserve current validation and diagnostics
 
-The current spawn collision logic uses conservative fixed node sizes.
+Keep the existing flow:
 
-Call nodes can grow significantly with many inputs/outputs.
+```text
+validateProject()
+  ├─ compile validation
+  └─ canvas node/port diagnostics
+```
 
-Improve spawn-size estimation using semantic information where practical.
+Do not create a second validation system for drop behavior.
 
-For example:
-
-- base call width stays fixed
-- estimated height = header + rows for ABI inputs/outputs + padding
-- literal/context/op nodes stay simple fixed estimates
-- IF uses its stored frame size
-
-Keep the calculation deterministic and pure.
-
-Do not introduce DOM measurement unless absolutely necessary.
+Containment transitions should use the same semantic rules already enforced by project state and validation.
 
 ---
 
-## 12. Preserve automatic ABI outputs
+## 5. Optional tiny polish
 
-Do not change the current direct ABI-output model.
+Only do these if they remain small and obvious.
 
-Keep:
+### Select newly dropped node
 
-- output ports directly on call nodes
-- lazy decoding only for used outputs
-- decoding immediately at the call site
-- unsupported dynamic outputs visible but non-connectable
+After a function is drag-dropped, selecting/focusing the new node is useful and consistent with click-to-add.
+
+### Keyboard activation for contract function rows
+
+Function rows currently behave like buttons.
+
+If straightforward, support keyboard activation with Enter/Space or use a semantic control that naturally provides this.
+
+Do not redesign the contract list.
+
+### Fit contents
+
+Do not add unless it is truly trivial now.
+
+It is not required for v2 completion.
+
+---
+
+## 6. Do not change automatic ABI outputs
+
+Keep the current direct ABI output model exactly as-is:
+
+- output ports live on call nodes
+- used outputs decode lazily
+- decoding happens immediately at the call site
+- dynamic unsupported outputs remain visible but non-connectable
 
 Do not reintroduce Decode nodes.
 
-Do not add dynamic ABI decoding in this pass.
+Do not add dynamic ABI decoding.
 
 ---
 
-## 13. Preserve deterministic semantics
+## 7. Do not change IF frame semantics
 
-Presentation changes must never alter program semantics.
+Keep:
 
-Specifically:
+- persistent presentation-only frame sizes
+- manual resizing
+- automatic outward growth
+- no automatic shrinking
+- selected-IF click spawning
+- drag existing nodes into/out of IFs
+- nested IFs
 
-- moving nodes must not alter generated source
-- resizing IFs must not alter generated source
-- changing only frame dimensions must not alter generated source
-- canvas coordinates must not participate in lowering
-- execution order remains graph/dependency based
-- IF scope remains semantic via `parent`
-
-Add regression tests for this.
-
----
-
-## 14. Suggested implementation order
-
-1. Extend visual project presentation metadata with persistent IF frame sizes.
-2. Add IF resize interaction.
-3. Update IF geometry helpers to use stored frame size as the baseline.
-4. Add automatic growth when children exceed bounds.
-5. Update spawn logic to support selected-IF spawning.
-6. Improve semantic node size estimation for collision checks.
-7. Feed `validateProject()` diagnostics into canvas rendering.
-8. Add node/port error states.
-9. Improve selected-node styling.
-10. Add optional Fit contents only if it stays small.
-11. Add focused tests.
-
-Keep each step independently working.
+The only required IF change is making depth order-independent and making new drag-dropped functions honor containment.
 
 ---
 
-## 15. Testing
+## 8. Testing
 
-Do not add browser-testing requirements to this plan.
+Focus on stable automated tests.
 
-Focus on automated unit/component tests that are stable in the existing test environment.
+Add/adjust tests for:
 
-Prioritize pure tests for:
+- dropping a contract function inside a top-level IF assigns that parent
+- dropping inside nested IFs chooses the deepest IF
+- dropping outside every IF creates a top-level node
+- containment choice is independent of node array order
+- nested IF depths are correct with reversed node order
+- nested IF depths are correct with shuffled node order
+- cycle-safe depth calculation does not hang
+- drag/drop containment does not affect deterministic lowering beyond the intended semantic parent
+- moving/resizing presentation metadata still does not affect generated source
 
-- persisted IF frame size parsing
-- frame resize state updates
-- resize has no effect on generated source
-- frame auto-expansion
-- nested frame expansion
-- IF-aware spawn selects a free position
-- IF-aware spawn assigns the correct semantic parent
-- spawning a large call uses a realistic estimated height
-- graph diagnostics map correctly to node/port UI state
-- moving/resizing nodes never changes generated source
-- existing lazy ABI output decoding remains unchanged
-
-UI/component tests should cover only stable behavior:
-
-- IF resize callback updates presentation state
-- selected IF causes new nodes to be created inside it
-- invalid node gets an error state
-- invalid port gets an error state
-- selected node styling is applied
-- unsupported ABI output remains visually distinct and non-connectable
-
-Avoid brittle pixel-level geometry assertions.
+Do not add browser-testing requirements.
 
 ---
 
@@ -345,22 +232,29 @@ Avoid brittle pixel-level geometry assertions.
 
 Do not add:
 
+- new node types
+- loops
+- else branches
+- visual functions/modules
+- arbitrary source -> graph conversion
 - visual project import/export
 - wallet connection
 - simulation
 - execution
-- Intereth integration
 - explorer ABI fetching
-- auto-layout engine
-- new node families
-- loops
-- else branches
-- reusable visual functions/modules
-- arbitrary code → graph conversion
+- Intereth integration
+- auto-layout
 - dynamic ABI decoding
-- general plugin architecture
-- browser-testing instructions
+- generic plugin architecture
 
-The finish criterion is:
+---
 
-**IF blocks should feel like usable work areas rather than tight wrappers, graph errors should be visible where they occur, and adding/moving nodes should remain spatially predictable without changing LISA semantics.**
+## Finish criterion
+
+v2 is done when:
+
+- a contract function dropped inside an IF is semantically inside that IF
+- nested IF containment behaves correctly regardless of node storage order
+- existing ABI decoding, diagnostics, resizing, spawning, and deterministic lowering remain intact
+
+After these fixes, prefer freezing/merging v2 instead of adding more visual functionality.
