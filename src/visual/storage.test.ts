@@ -30,7 +30,7 @@ const PROJECT: StoredProject = {
       { id: 'e1', from: { node: 'lit1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
       { id: 'e2', from: { node: 'call1', port: 'out:0' }, to: { node: 'call2', port: 'arg:0' } },
     ],
-    positions: { call1: { x: 40, y: 80 } },
+    positions: { call1: { x: 40, y: 80 } }, frameSizes: {},
   },
 };
 
@@ -208,7 +208,7 @@ describe('loadStoredProject', () => {
     const storage = new FakeStorage();
     storage.setItem(SOURCE_STORAGE_KEY, 'const p = createProgram();\nreturn p;');
     const loaded = loadStoredProject(storage);
-    expect(loaded).toEqual({ version: 1, mode: 'code', codeSource: 'const p = createProgram();\nreturn p;', visual: { contracts: [], nodes: [], edges: [], positions: {} } });
+    expect(loaded).toEqual({ version: 1, mode: 'code', codeSource: 'const p = createProgram();\nreturn p;', visual: { contracts: [], nodes: [], edges: [], positions: {}, frameSizes: {} } });
   });
 
   it('recovers to null on corrupt saved state', () => {
@@ -221,5 +221,45 @@ describe('loadStoredProject', () => {
     const storage = { getItem() { throw new Error('blocked'); } };
     expect(loadStoredProject(storage)).toBeNull();
     saveStoredProject(PROJECT, { setItem() { throw new Error('blocked'); } });
+  });
+});
+
+describe('saved IF frame sizes', () => {
+  const withIf = (extra: Record<string, unknown>) => JSON.stringify({
+    version: 1, mode: 'visual', codeSource: null,
+    visual: { contracts: [], nodes: [{ id: 'if1', kind: 'if' }], edges: [], positions: { if1: { x: 0, y: 0 } }, ...extra },
+  });
+
+  it('defaults to empty when older saves lack the field entirely', () => {
+    const parsed = parseStoredProject(withIf({}));
+    expect(parsed.visual.frameSizes).toEqual({});
+  });
+
+  it('keeps valid sizes, clamps tiny ones, and drops garbage', () => {
+    const parsed = parseStoredProject(JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [],
+        nodes: [{ id: 'if1', kind: 'if' }, { id: 'if2', kind: 'if' }, { id: 'ctx1', kind: 'context', name: 'SELF' }],
+        edges: [],
+        positions: { if1: { x: 0, y: 0 }, if2: { x: 0, y: 0 }, ctx1: { x: 0, y: 0 } },
+        frameSizes: {
+          if1: { width: 900, height: 500 },
+          if2: { width: 1, height: 1 },
+          ctx1: { width: 400, height: 400 },
+          ghost: { width: 400, height: 400 },
+          ifx: { width: 'big', height: 400 },
+          ifz: 'nope',
+        },
+      },
+    }));
+    expect(parsed.visual.frameSizes).toEqual({ if1: { width: 900, height: 500 }, if2: { width: 260, height: 150 } });
+  });
+
+  it('survives a save/load round trip', () => {
+    const parsed = parseStoredProject(withIf({ frameSizes: { if1: { width: 700, height: 640 } } }));
+    const storage = new FakeStorage();
+    saveStoredProject(parsed, storage);
+    expect(loadStoredProject(storage)!.visual.frameSizes.if1).toEqual({ width: 700, height: 640 });
   });
 });

@@ -62,6 +62,10 @@ vi.mock('./visual/VisualCanvas', () => ({
       aria-label="simulate-delete-first"
       onClick={() => props.onDeleteNodes(props.project.nodes.slice(0, 1).map((n: { id: string }) => n.id))}
     />
+    <button
+      aria-label="simulate-resize-first-if"
+      onClick={() => props.onResizeIf?.(props.project.nodes[0]?.id ?? '', { width: 700, height: 500 })}
+    />
   </>,
 }));
 
@@ -427,4 +431,57 @@ describe('App', () => {
     render(<App />);
     expect(screen.getByLabelText('LISA source editor')).toBeInTheDocument();
   });
+
+  it('adds a node into the selected IF frame instead of the viewport', async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [{ id: 'c1', name: 'USDC', address: ADDRESS, functions: [{
+          signature: 'balanceOf(address)', name: 'balanceOf', inputs: ['address'], outputs: ['uint256'], mutability: 'view',
+        }] }],
+        nodes: [{ id: 'if1', kind: 'if' }],
+        edges: [],
+        positions: { if1: { x: 0, y: 0 } },
+        frameSizes: { if1: { width: 420, height: 260 } },
+      },
+    }));
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand USDC' }));
+    fireEvent.click(screen.getByRole('button', { name: 'balanceOf(address)' }));
+    // Nothing selected yet: the add must not be parented by overlap guesswork.
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY)!).visual.nodes).toHaveLength(2));
+    expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY)!).visual.nodes[1].parent).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-select-first' }));
+    fireEvent.click(screen.getByRole('button', { name: 'balanceOf(address)' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY)!).visual;
+      const added = saved.nodes[2];
+      expect(added?.parent).toBe('if1');
+      expect(saved.positions[added.id].x).toBeGreaterThanOrEqual(0);
+      expect(saved.positions[added.id].y).toBeGreaterThanOrEqual(44);
+      expect(saved.positions[added.id].x + 250).toBeLessThanOrEqual(saved.frameSizes.if1.width);
+    });
+  });
+
+  it('an IF frame resize is presentation state and persists', async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [], nodes: [{ id: 'if1', kind: 'if' }], edges: [],
+        positions: { if1: { x: 10, y: 10 } }, frameSizes: { if1: { width: 420, height: 260 } },
+      },
+    }));
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-resize-first-if' }));
+    await waitFor(() => expect(
+      JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY)!).visual.frameSizes.if1,
+    ).toEqual({ width: 700, height: 500 }));
+    const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY)!).visual;
+    expect(saved.nodes).toEqual([{ id: 'if1', kind: 'if' }]);
+    expect(saved.positions.if1).toEqual({ x: 10, y: 10 });
+  });
+
 });
+

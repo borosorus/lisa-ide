@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, CssBaseline, IconButton, MenuItem, Paper, Select,
   Stack, Tab, Tabs, ThemeProvider, ToggleButton, ToggleButtonGroup, Typography, createTheme,
@@ -12,12 +12,14 @@ import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas, type CanvasApi } from './visual/VisualCanvas';
 import {
-  addContract, addNode, connectPort, removeContract, removeEdge, removeNodes,
-  setNodeParent, setNodePosition, updateContract, updateNode,
+  addContract, addNode, connectPort, moveGraphNodes, removeContract, removeEdge, removeNodes,
+  setNodeFrameSize, updateContract, updateNode,
 } from './visual/projectState';
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type Vec2, type VisualProject } from './visual/model';
 import { NodeInspector, VisualPalette } from './visual/NodePanel';
-import { nodeSize, occupiedRects, spawnPosition } from './visual/spawnPosition';
+import { nodeSize, spawnPosition } from './visual/spawnPosition';
+import { occupiedRects, spawnInsideIf } from './visual/containment';
+import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import './styles.css';
 
@@ -68,6 +70,8 @@ export default function App() {
 
   useEffect(() => () => client.current?.cancel(), []);
   useEffect(() => saveStoredProject({ version: 1, mode, codeSource: source, visual: project }), [mode, source, project]);
+  // One pure validation pass feeds both the canvas error states and compile.
+  const diagnostics = useMemo(() => validateProject(project), [project]);
 
   function replaceSource(next: string, nextNotice = '') {
     if (next === source) {
@@ -98,38 +102,42 @@ export default function App() {
   function addCallNode(contractId: string, signature: string, anchor: Vec2) {
     const id = createId(project.nodes.map(n => n.id), 'call');
     setFocusNodeId(id);
-    editVisual(p => addNode(p, { id, kind: 'call', contractId, signature }, spawnNear(p, anchor, 'call')));
+    editVisual(p => addNode(p, { id, kind: 'call', contractId, signature }, spawnNear(p, anchor, { id, kind: 'call', contractId, signature })));
   }
 
   function moveNodes(changes: Readonly<Record<string, Vec2>>, parents: Readonly<Record<string, string | null>> = {}) {
     const semantic = Object.keys(parents).length > 0;
-    editVisual(p => {
-      let next = Object.entries(changes).reduce(
-        (acc, [id, position]) => setNodePosition(acc, id, position),
-        p,
-      );
-      for (const [id, parent] of Object.entries(parents)) {
-        next = setNodeParent(next, id, parent === null ? undefined : parent);
-      }
-      return next;
-    }, !semantic);
+    editVisual(p => moveGraphNodes(p, changes, parents), !semantic);
   }
 
   function addVisualNode(partial: GraphNodeDraft, prefix: string) {
     const id = createId(project.nodes.map(n => n.id), prefix);
     setFocusNodeId(id);
-    editVisual(p => {
-      const kind = (partial as GraphNode).kind;
-      return addNode(p, { ...partial, id } as GraphNode, spawnNear(p, viewportCenter(), kind));
-    });
+    editVisual(p => placeNode(p, { ...partial, id } as GraphNode));
   }
 
-  /** One placement mechanism for every new node: visible-viewport spiral. */
-  function spawnNear(p: VisualProject, anchor: Vec2, kind: GraphNode['kind']): Vec2 {
+  /**
+   * One creation funnel for palette adds and click-to-adds. A selected IF
+   * claims the new node: it spawns in a free slot of that frame's body
+   * (growing the frame when needed) and takes the semantic `parent`
+   * explicitly — never inferred from screen overlap. Without a selected IF
+   * the viewport spiral decides.
+   */
+  function placeNode(p: VisualProject, node: GraphNode): VisualProject {
+    const selectedIf = selectedId !== null && p.nodes.some(n => n.id === selectedId && n.kind === 'if') ? selectedId : null;
+    if (selectedIf !== null && selectedIf !== node.id) {
+      const placed = spawnInsideIf({ project: p, frameId: selectedIf, size: nodeSize(node, p) });
+      if (placed) return addNode(p, { ...node, parent: selectedIf } as GraphNode, placed.position);
+    }
+    return addNode(p, node, spawnNear(p, viewportCenter(), node));
+  }
+
+  /** Viewport-aware placement for nodes with no IF context: visible spiral. */
+  function spawnNear(p: VisualProject, anchor: Vec2, node: GraphNode): Vec2 {
     return spawnPosition({
       anchor,
-      size: nodeSize(kind),
-      occupied: occupiedRects(p.nodes, p.positions),
+      size: nodeSize(node, p),
+      occupied: occupiedRects(p),
       bounds: canvasApi.current?.viewportRect() ?? null,
     });
   }
@@ -138,9 +146,11 @@ export default function App() {
     return canvasApi.current?.viewportCenter() ?? { x: 320, y: 240 };
   }
 
-  /** Click-to-add from the library: land the node in the visible viewport. */
+  /** Click-to-add from the library: into the selected IF, else the viewport. */
   function addFunctionNode(contractId: string, signature: string) {
-    addCallNode(contractId, signature, viewportCenter());
+    const id = createId(project.nodes.map(n => n.id), 'call');
+    setFocusNodeId(id);
+    editVisual(p => placeNode(p, { id, kind: 'call', contractId, signature }));
   }
 
   async function compile() {
@@ -334,10 +344,12 @@ export default function App() {
             }}
             onConnect={(from, to) => editVisual(p => connectPort(p, { from, to }))}
             onPatchNode={(id, fields) => editVisual(p => updateNode(p, id, fields))}
+            onResizeIf={(id, size) => editVisual(p => setNodeFrameSize(p, id, size), true)}
             onSelectNode={id => { setSelectedId(id); if (id !== null) setSelectedEdgeId(null); }}
             onSelectEdge={id => { setSelectedEdgeId(id); if (id !== null) setSelectedId(null); }}
             selectedNodeId={selectedId}
             selectedEdgeId={selectedEdgeId}
+            diagnostics={diagnostics}
             focusNodeId={focusNodeId}
           />
         </Paper>

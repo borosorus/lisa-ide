@@ -1,8 +1,8 @@
 import { SOURCE_STORAGE_KEY } from '../editor/sourceStorage';
 import {
-  BINARY_OPS, CONTEXT_NAMES, canonicalWordType, isValidLiteral, outputHeadOffsets,
+  BINARY_OPS, clampFrameSize, CONTEXT_NAMES, canonicalWordType, isValidLiteral, outputHeadOffsets,
   emptyProject,
-  type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type Vec2, type VisualProject,
+  type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type IfFrameSize, type Vec2, type VisualProject,
 } from './model';
 import { canonicalInputType, isValidAddress } from './abi';
 import type { ContractFunction, ContractResource } from './model';
@@ -105,6 +105,7 @@ function parseVisual(value: unknown): VisualProject {
     }
   }
   const nodeIds = new Set(nodes.map(n => n.id));
+  const ifIds = new Set(nodes.filter(n => n.kind === 'if').map(n => n.id));
   const parsedEdges = parseItems(value.edges, parseEdge, 'edges');
   // Fold the old explicit-decoder graphs onto the call's own output ports.
   const { kept, legacy } = splitLegacyEdges(parsedEdges, new Set(decoders.keys()));
@@ -116,6 +117,7 @@ function parseVisual(value: unknown): VisualProject {
     nodes,
     edges,
     positions: Object.fromEntries(Object.entries(positions).filter(([id]) => nodeIds.has(id))),
+    frameSizes: parseFrameSizes(value.frameSizes, ifIds),
   };
 }
 
@@ -278,4 +280,23 @@ function parsePositions(value: unknown): Readonly<Record<string, Vec2>> {
     }
   }
   return positions;
+}
+
+/**
+ * Frame sizes are newer optional presentation data: a missing or malformed
+ * map is never fatal (old saves predate it), only bad entries drop.
+ * Values are clamped up to the minimum so a corrupt tiny size cannot
+ * collapse a frame; entries for non-IF nodes are dropped.
+ */
+function parseFrameSizes(value: unknown, ifIds: ReadonlySet<string>): Readonly<Record<string, IfFrameSize>> {
+  if (!isRecord(value)) return {};
+  const sizes: Record<string, IfFrameSize> = {};
+  for (const [id, entry] of Object.entries(value)) {
+    if (!ifIds.has(id) || !isRecord(entry)) continue;
+    const { width, height } = entry;
+    if (typeof width !== 'number' || typeof height !== 'number'
+        || !Number.isFinite(width) || !Number.isFinite(height)) continue;
+    sizes[id] = clampFrameSize({ width, height });
+  }
+  return sizes;
 }

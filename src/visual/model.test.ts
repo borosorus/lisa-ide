@@ -13,6 +13,6 @@ describe('createId', () => {
 describe('emptyProject', () => {
   it('is serializable and empty', () => {
     const project: VisualProject = emptyProject();
-    expect(JSON.parse(JSON.stringify(project))).toEqual({ contracts: [], nodes: [], edges: [], positions: {} });
+    expect(JSON.parse(JSON.stringify(project))).toEqual({ contracts: [], nodes: [], edges: [], positions: {}, frameSizes: {} });
   });
 });

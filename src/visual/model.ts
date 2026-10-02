@@ -153,16 +153,34 @@ export interface GraphEdge {
   readonly to: GraphEndpoint;
 }
 
+/** Persistent visual size of an IF container, in flow pixels. */
+export interface IfFrameSize {
+  readonly width: number;
+  readonly height: number;
+}
+
+/** Comfortable starting work area for a new IF; content growth may exceed it. */
+export const IF_DEFAULT_SIZE: IfFrameSize = { width: 420, height: 260 };
+
+/** Below this the header or a usable body strip disappears. */
+export const IF_MIN_SIZE: IfFrameSize = { width: 260, height: 150 };
+
+export function clampFrameSize(size: IfFrameSize): IfFrameSize {
+  return { width: Math.max(size.width, IF_MIN_SIZE.width), height: Math.max(size.height, IF_MIN_SIZE.height) };
+}
+
 export interface VisualProject {
   readonly contracts: readonly ContractResource[];
   readonly nodes: readonly GraphNode[];
   readonly edges: readonly GraphEdge[];
   /** Presentation metadata only; semantics never read positions. */
   readonly positions: Readonly<Record<string, Vec2>>;
+  /** Presentation-only frame sizes of IF nodes; absent entries use IF_DEFAULT_SIZE. */
+  readonly frameSizes: Readonly<Record<string, IfFrameSize>>;
 }
 
 export function emptyProject(): VisualProject {
-  return { contracts: [], nodes: [], edges: [], positions: {} };
+  return { contracts: [], nodes: [], edges: [], positions: {}, frameSizes: {} };
 }
 
 /** Deterministic unprefixed-collision ids like `n1`, `call3`, `e12`. */

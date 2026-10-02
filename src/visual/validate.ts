@@ -15,6 +15,29 @@ export interface GraphDiagnostic {
   readonly port?: string;
 }
 
+/** Everything wrong with one node: all messages, and the ports implicated. */
+export interface NodeErrors {
+  readonly messages: readonly string[];
+  readonly ports: ReadonlySet<string>;
+}
+
+/**
+ * Group diagnostics by node for canvas rendering. Node-less diagnostics
+ * belong only to the global summary; a diagnostic naming a port marks both
+ * the port and its node. Pure — components must not re-derive validity.
+ */
+export function indexDiagnostics(diagnostics: readonly GraphDiagnostic[]): ReadonlyMap<string, NodeErrors> {
+  const byNode = new Map<string, { messages: string[]; ports: Set<string> }>();
+  for (const d of diagnostics) {
+    if (!d.node) continue;
+    const entry = byNode.get(d.node) ?? { messages: [], ports: new Set<string>() };
+    entry.messages.push(d.message);
+    if (d.port) entry.ports.add(d.port);
+    byNode.set(d.node, entry);
+  }
+  return new Map([...byNode].map(([id, e]) => [id, { messages: e.messages, ports: e.ports } as NodeErrors]));
+}
+
 export function validateProject(project: VisualProject): GraphDiagnostic[] {
   const diagnostics: GraphDiagnostic[] = [];
   const byId = new Map<string, GraphNode>();

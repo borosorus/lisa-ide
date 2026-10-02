@@ -51,3 +51,16 @@ body { background: #0b1220; }
 .react-flow .port-condition { background: #f6c177; }
 .react-flow .port-blocked { background: #3a4c68; border-style: dashed; }
 @media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .app-fixed { height: auto; min-height: 100vh; overflow: visible; } .visual-workspace { grid-template-columns: 1fr; grid-template-rows: auto; } .visual-workspace.library-collapsed { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; grid-row: auto; } .visual-workspace .canvas-pane { height: 60vh; } .visual-workspace .side-pane { max-height: 50vh; } .visual-workspace .output-pane { height: 45vh; } .visual-workspace .output-pane.output-collapsed { height: auto; } }
+
+/* Interaction states: selected, invalid, and both at once stay distinct. */
+.lisa-node.node-selected { border-color: #8ebdff; box-shadow: 0 0 0 2px rgba(142, 189, 255, 0.35); }
+.lisa-node.node-invalid { border-color: #ef8f8f; box-shadow: 0 0 0 1px rgba(239, 143, 143, 0.4); }
+.lisa-node.node-invalid.node-selected { box-shadow: 0 0 0 2px rgba(142, 189, 255, 0.5), 0 0 0 4px rgba(239, 143, 143, 0.5); }
+.lisa-node-if.node-selected { border-style: dashed; }
+.row-invalid .port-label { color: #ef8f8f; }
+.react-flow .port.port-invalid { background: #ef8f8f; border-color: #ffdcdc; box-shadow: 0 0 5px rgba(239, 143, 143, 0.9); }
+.node-error-text { margin-top: 6px; color: #ffb4b4; font-size: 11px; line-height: 1.35; }
+
+/* IF resize grip: quiet until hovered or the frame is selected. */
+.if-resize { position: absolute; right: -5px; bottom: -5px; width: 13px; height: 13px; border-radius: 3px; background: #f6c177; border: 1px solid #0b1220; opacity: 0; transition: opacity .12s; cursor: nwse-resize; }
+.lisa-node-if:hover .if-resize, .lisa-node-if.node-selected .if-resize, .if-resize:hover { opacity: 0.95; }

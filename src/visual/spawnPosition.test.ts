@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { occupiedRects, spawnPosition } from './spawnPosition';
+import { nodeSize, spawnPosition, spawnPositionInBounds } from './spawnPosition';
+import { occupiedRects } from './containment';
 import { addNode } from './projectState';
-import { emptyProject } from './model';
+import { emptyProject, type VisualProject } from './model';
 
 const SIZE = { width: 250, height: 104 };
 
@@ -61,10 +62,65 @@ describe('spawnPosition', () => {
     let project = emptyProject();
     project = addNode(project, { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' }, { x: 100, y: 100 });
     project = addNode(project, { id: 'ctx1', kind: 'context', name: 'SELF' }, { x: 700, y: 40 });
-    const rects = occupiedRects(project.nodes, project.positions);
+    const rects = occupiedRects(project);
     expect(rects).toHaveLength(2);
     expect(rects[0]).toMatchObject({ x: 100, y: 100 });
     const next = spawnPosition({ anchor: { x: 190, y: 132 }, size: { width: 180, height: 64 }, occupied: rects });
     expect(next).not.toEqual({ x: 100, y: 100 });
+  });
+});
+
+describe('nodeSize estimation', () => {
+  const ADDRESS = '0x1111111111111111111111111111111111111111';
+  const wide: VisualProject = {
+    ...emptyProject(),
+    contracts: [{
+      id: 'c1', name: 'Vault', address: ADDRESS,
+      functions: [
+        { signature: 'f()', name: 'f', inputs: [], outputs: [], mutability: 'view' },
+        { signature: 'multi(address,uint256,bool)', name: 'multi', inputs: ['address', 'uint256', 'bool'], outputs: ['uint256', 'bool'], mutability: 'nonpayable' },
+      ],
+    }],
+  };
+
+  it('grows call cards with their ABI port count', () => {
+    const small = nodeSize({ id: 'a', kind: 'call', contractId: 'c1', signature: 'f()' }, wide);
+    const big = nodeSize({ id: 'b', kind: 'call', contractId: 'c1', signature: 'multi(address,uint256,bool)' }, wide);
+    expect(big.width).toBe(small.width);
+    expect(big.height).toBeGreaterThan(small.height);
+    expect(big.height).toBe(84 + 5 * 29);
+  });
+
+  it('sizes an IF from its stored frame size', () => {
+    const p = { ...emptyProject(), frameSizes: { if1: { width: 900, height: 640 } } };
+    expect(nodeSize({ id: 'if1', kind: 'if' }, p)).toEqual({ width: 900, height: 640 });
+    expect(nodeSize({ id: 'if9', kind: 'if' }, emptyProject())).toEqual({ width: 420, height: 260 });
+  });
+
+  it('is deterministic for identical projects', () => {
+    const node = { id: 'b', kind: 'call', contractId: 'c1', signature: 'multi(address,uint256,bool)' } as const;
+    expect(nodeSize(node, wide)).toEqual(nodeSize(node, wide));
+  });
+});
+
+describe('spawnPositionInBounds', () => {
+  const SIZE = { width: 180, height: 64 };
+  const BOUNDS = { x: 0, y: 0, width: 400, height: 300 };
+
+  it('centers the first slot and stays inside', () => {
+    const at = spawnPositionInBounds({ anchor: { x: 200, y: 150 }, size: SIZE, occupied: [], bounds: BOUNDS });
+    expect(at).not.toBeNull();
+    expect(at!.x).toBeGreaterThanOrEqual(0);
+    expect(at!.y).toBeGreaterThanOrEqual(0);
+    expect(at!.x + SIZE.width).toBeLessThanOrEqual(400);
+    expect(at!.y + SIZE.height).toBeLessThanOrEqual(300);
+  });
+
+  it('returns null instead of an out-of-bounds fallback', () => {
+    const occupied = [];
+    for (let x = -200; x < 600; x += 200) {
+      for (let y = -200; y < 500; y += 90) occupied.push({ x, y, ...SIZE });
+    }
+    expect(spawnPositionInBounds({ anchor: { x: 200, y: 150 }, size: SIZE, occupied, bounds: BOUNDS })).toBeNull();
   });
 });

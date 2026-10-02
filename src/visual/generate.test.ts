@@ -39,6 +39,7 @@ function starterLikeProject(): VisualProject {
     ],
     nodes, edges,
     positions: { call1: { x: 1, y: 2 } },
+    frameSizes: {},
   };
 }
 
@@ -303,7 +304,7 @@ return p;`);
         { id: 'c1', name: 'TOKEN', address: USDC, functions: TOKEN_FNS },
         { id: 'c2', name: 'VAULT', address: VAULT, functions: VAULT_FNS },
       ],
-      nodes, edges, positions: {},
+      nodes, edges, positions: {}, frameSizes: {},
     };
     const reversed: VisualProject = { ...base, nodes: [...nodes].reverse() };
     const fromGraph = generateVisualSource(base);
@@ -324,5 +325,17 @@ return p;`);
       edges: [],
     };
     expect(() => generateVisualSource(project)).toThrowError(/missing contract/i);
+  });
+});
+
+describe('presentation cannot reach lowering', () => {
+  it('frame sizes and positions never change the generated source', () => {
+    const base = starterLikeProject();
+    const twin = {
+      ...base,
+      positions: Object.fromEntries(base.nodes.map((n, i) => [n.id, { x: 7000 - i * 131, y: i * 91 }])),
+      frameSizes: { if1: { width: 1600, height: 900 }, ifAbsent: { width: 10, height: 10 } },
+    };
+    expect(generateVisualSource(twin)).toBe(generateVisualSource(base));
   });
 });

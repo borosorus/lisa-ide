@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { Handle, Position, useUpdateNodeInternals, useViewport, type NodeProps } from '@xyflow/react';
 import { inputPorts, outputPorts, type PortSpec } from './ports';
 import type { Frame } from './containment';
-import { BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type LiteralType, type VisualProject } from './model';
+import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfFrameSize, type LiteralType, type VisualProject } from './model';
+import type { NodeErrors } from './validate';
 
 /**
  * Canvas rendering of semantic nodes: readable cards with row-aligned ports
@@ -13,6 +14,8 @@ import { BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp
 export interface NodeEditApi {
   /** Apply a validated field patch to the node with this id. */
   patch(nodeId: string, fields: Record<string, unknown>): void;
+  /** Persist a user resize of an IF frame; presentation only. */
+  resize?(nodeId: string, size: IfFrameSize): void;
 }
 
 export const NodeEditContext = createContext<NodeEditApi | null>(null);
@@ -22,6 +25,10 @@ export interface LisaNodeData extends Record<string, unknown> {
   project: VisualProject;
   /** Presentation-only IF container frame; sized onto the node wrapper. */
   frame?: Frame;
+  /** validateProject() findings for this node; canvas shows them in place. */
+  errors?: NodeErrors;
+  /** True for the currently selected node. */
+  selected?: boolean;
 }
 
 /** Props every inline control needs so canvas gestures don't intercept it. */
@@ -54,10 +61,12 @@ export function nodeLabel(node: GraphNode, project: VisualProject): string {
 const OP_GLYPH: Record<BinaryOp, string> = { add: '+', sub: '−', mul: '×', div: '÷', lt: '<', gt: '>', eq: '=' };
 
 export function LisaNode({ id, data }: NodeProps) {
-  const { node, project } = data as unknown as LisaNodeData;
+  const { node, project, frame, errors, selected } = data as unknown as LisaNodeData;
   const edit = useContext(NodeEditContext);
   const inputs = inputPorts(node, project);
   const outputs = outputPorts(node, project);
+  const invalid = errors !== undefined && errors.messages.length > 0;
+  const errorText = invalid ? errors.messages.join(' · ') : '';
 
   // Handles moved between rows when the ABI or literal type changed; xyflow
   // only re-measures on request.
@@ -67,16 +76,20 @@ export function LisaNode({ id, data }: NodeProps) {
 
   const stop = stopEvents();
   const call = node.kind === 'call' ? callHead(node, project) : null;
+  const bad = (port: string) => errors?.ports.has(port) === true;
 
-  return <div className={`lisa-node lisa-node-${node.kind}`} title={nodeLabel(node, project)}>
+  return <div className={`lisa-node lisa-node-${node.kind}${invalid ? ' node-invalid' : ''}${selected ? ' node-selected' : ''}`}
+    title={`${nodeLabel(node, project)}${errorText ? ` — ${errorText}` : ''}`}>
     {call ? <>
       <div className="node-head"><span className="node-name" title={call.title}>{call.contract}</span></div>
       <div className="node-func" title={call.title}>{call.fn}</div>
     </> : <div className="node-head">
       <span className="node-kind">{node.kind}</span>
     </div>}
-    {inputs.map(port => <div className="node-row left" key={port.name}>
-      <Handle type="target" id={port.name} position={Position.Left} className={`port port-${port.kind}`} title={`${port.label} (${port.kind})`} />
+    {inputs.map(port => <div className={`node-row left${bad(port.name) ? ' row-invalid' : ''}`} key={port.name}>
+      <Handle type="target" id={port.name} position={Position.Left}
+        className={`port port-${port.kind}${bad(port.name) ? ' port-invalid' : ''}`}
+        title={`${port.label} (${port.kind})${bad(port.name) ? ' — needs an input' : ''}`} />
       <span className={`port-label${port.name === 'value' ? ' payable-value' : ''}`}>{port.label}</span>
     </div>)}
     {node.kind === 'context' && <div className="node-row control">
@@ -116,16 +129,75 @@ export function LisaNode({ id, data }: NodeProps) {
       <Handle type="source" id="out" position={Position.Right}
         className={`port ${node.op === 'lt' || node.op === 'gt' || node.op === 'eq' ? 'port-condition' : 'port-value'}`} title="result (out)" />
     </div>}
-    {node.kind === 'call' && outputs.map(port => <div className="node-row right" key={port.name}>
+    {node.kind === 'call' && outputs.map(port => <div className={`node-row right${bad(port.name) ? ' row-invalid' : ''}`} key={port.name}>
       <span className={`port-label${port.connectable === false ? ' unsupported' : ''}`}
         title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`}>
         {port.connectable === false ? `✕ ${port.label}` : port.label}
       </span>
       <Handle type="source" id={port.name} position={Position.Right}
-        className={`port port-${port.kind}${port.connectable === false ? ' port-blocked' : ''}`}
+        className={`port port-${port.kind}${port.connectable === false ? ' port-blocked' : ''}${bad(port.name) ? ' port-invalid' : ''}`}
         title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`} />
     </div>)}
+    {node.kind === 'if' && frame && <IfResizeGrip frame={frame} edit={edit} />}
+    {selected && errors !== undefined && errors.messages.length > 0 && <div className="node-error-text" role="alert">{errors.messages[0]}</div>}
   </div>;
+}
+
+/**
+ * Bottom-right resize grip for IF frames. Dragging is local: the live size
+ * is written straight onto the node wrapper while the pointer is down, and
+ * the final size is committed once to project presentation state on
+ * release. Nothing semantic ever sees these numbers.
+ */
+function IfResizeGrip({ frame, edit }: { frame: Frame; edit: NodeEditApi | null }) {
+  const { zoom } = useViewport();
+  const drag = useRef<{
+    element: HTMLElement | null;
+    pointerX: number; pointerY: number; width: number; height: number; latest: IfFrameSize;
+  } | null>(null);
+  const gripRef = useRef<HTMLDivElement | null>(null);
+  const stop = stopEvents();
+
+  // A live-dragged (never committed) size must not survive cancel or unmount.
+  useEffect(() => () => {
+    const d = drag.current;
+    if (d?.element) { d.element.style.width = `${d.width}px`; d.element.style.height = `${d.height}px`; }
+  }, []);
+
+  function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    event.stopPropagation();
+    event.preventDefault();
+    gripRef.current?.setPointerCapture?.(event.pointerId);
+    drag.current = {
+      element: gripRef.current?.closest('.react-flow__node') ?? null,
+      pointerX: event.clientX, pointerY: event.clientY,
+      width: frame.rect.width, height: frame.rect.height,
+      latest: { width: frame.rect.width, height: frame.rect.height },
+    };
+  }
+  function onPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const d = drag.current;
+    if (!d) return;
+    const size = {
+      width: Math.max(IF_MIN_SIZE.width, d.width + (event.clientX - d.pointerX) / zoom),
+      height: Math.max(IF_MIN_SIZE.height, d.height + (event.clientY - d.pointerY) / zoom),
+    };
+    d.latest = size;
+    if (d.element) { d.element.style.width = `${size.width}px`; d.element.style.height = `${size.height}px`; }
+  }
+  function finish(event: React.PointerEvent<HTMLDivElement> | null, commit: boolean) {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (event) gripRef.current?.releasePointerCapture?.(event.pointerId);
+    if (commit) edit?.resize?.(frame.id, d.latest);
+    else if (d.element) { d.element.style.width = `${d.width}px`; d.element.style.height = `${d.height}px`; }
+  }
+
+  return <div ref={gripRef} className="if-resize nodrag" aria-label="Resize IF frame" title="Drag to resize this IF"
+    {...stop}
+    onPointerDown={onPointerDown} onPointerMove={onPointerMove}
+    onPointerUp={event => finish(event, true)} onPointerCancel={() => finish(null, false)} />;
 }
 
 /** Free-text literal editor: commits only text the graph grammar accepts. */

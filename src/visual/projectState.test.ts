@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { emptyProject, type VisualProject } from './model';
 import {
-  addContract, addEdge, addNode, connectPort, removeContract, removeEdge, removeNodes,
-  setNodeParent, setNodePosition, updateContract, updateNode,
+  addContract, addEdge, addNode, connectPort, moveGraphNodes, removeContract, removeEdge, removeNodes,
+  setNodeFrameSize, setNodeParent, setNodePosition, updateContract, updateNode,
 } from './projectState';
+import { iframes } from './containment';
 
 const ADDRESS = '0x1111111111111111111111111111111111111111';
 const contract = (name: string) => ({ name, address: ADDRESS, functions: [] as const });
@@ -145,5 +146,77 @@ describe('nodes', () => {
     p = addNode(p, { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1', parent: 'if1' }, { x: 0, y: 0 });
     p = updateNode(p, 'lit1', { literal: '42' });
     expect(p.nodes[0]).toEqual({ id: 'lit1', kind: 'literal', literalType: 'uint', literal: '42', parent: 'if1' });
+  });
+});
+
+describe('IF frame sizes', () => {
+  const IF: VisualProject['nodes'][number] = { id: 'if1', kind: 'if' };
+
+  it('a new IF starts at the comfortable default frame size', () => {
+    const p = addNode(emptyProject(), IF, { x: 0, y: 0 });
+    expect(p.frameSizes.if1).toEqual({ width: 420, height: 260 });
+  });
+
+  it('resizing clamps to the minimum and stays presentation-only', () => {
+    let p = addNode(emptyProject(), IF, { x: 10, y: 10 });
+    p = addNode(p, { id: 'ctx1', kind: 'context', name: 'SELF' }, { x: 40, y: 80 });
+    const before = p;
+    p = setNodeFrameSize(p, 'if1', { width: 1, height: 1 });
+    expect(p.frameSizes.if1).toEqual({ width: 260, height: 150 });
+    expect(p.nodes).toEqual(before.nodes);
+    expect(p.edges).toEqual(before.edges);
+    expect(p.positions).toEqual(before.positions);
+  });
+
+  it('rejects sizes for non-IF nodes and non-finite numbers', () => {
+    let p = addNode(emptyProject(), { id: 'ctx1', kind: 'context', name: 'SELF' }, { x: 0, y: 0 });
+    expect(setNodeFrameSize(p, 'ctx1', { width: 900, height: 900 })).toBe(p);
+    p = addNode(p, IF, { x: 0, y: 0 });
+    const nan = setNodeFrameSize(p, 'if1', { width: Number.NaN, height: 500 });
+    expect(nan.frameSizes.if1).toEqual({ width: 420, height: 260 });
+  });
+
+  it('shrinking below the content keeps the frame wrapping its children', () => {
+    let p = addNode(emptyProject(), { ...IF }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'call1', kind: 'call', contractId: 'c1', signature: 'f()', parent: 'if1' }, { x: 900, y: 500 });
+    p = setNodeFrameSize(p, 'if1', { width: 260, height: 150 });
+    const frame = iframes(p).get('if1')!;
+    expect(p.frameSizes.if1.width).toBeGreaterThanOrEqual(900 + 250 + 16);
+    expect(frame.rect.height).toBeGreaterThanOrEqual(500 + 16);
+  });
+
+  it('moving a child outward grows the stored frame; moving back never shrinks it', () => {
+    let p = addNode(emptyProject(), { ...IF }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1' }, { x: 40, y: 80 });
+    p = moveGraphNodes(p, { ctx1: { x: 1200, y: 900 } });
+    const grown = { ...p.frameSizes.if1 };
+    expect(grown.width).toBeGreaterThanOrEqual(1200 + 180 + 16);
+    expect(grown.height).toBeGreaterThanOrEqual(900 + 64 + 16);
+    p = moveGraphNodes(p, { ctx1: { x: 40, y: 80 } });
+    expect(p.frameSizes.if1).toEqual(grown);
+  });
+
+  it('growth propagates outward through nested IFs and is persisted', () => {
+    let p = addNode(emptyProject(), { ...IF }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'if2', kind: 'if', parent: 'if1' }, { x: 100, y: 100 });
+    p = addNode(p, { id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if2' }, { x: 200, y: 200 });
+    p = moveGraphNodes(p, { ctx1: { x: 1500, y: 1100 } });
+    expect(p.frameSizes.if2.width).toBeGreaterThanOrEqual(1500 - 100 + 180 + 16);
+    expect(p.frameSizes.if1.width).toBeGreaterThanOrEqual(100 + p.frameSizes.if2.width + 16);
+  });
+
+  it('moveGraphNodes applies parents and positions as one edit', () => {
+    let p = addNode(emptyProject(), { ...IF }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'ctx1', kind: 'context', name: 'SELF' }, { x: 1000, y: 900 });
+    p = moveGraphNodes(p, { ctx1: { x: 300, y: 200 } }, { ctx1: 'if1' });
+    expect(p.nodes.find(n => n.id === 'ctx1')?.parent).toBe('if1');
+    expect(p.positions.ctx1).toEqual({ x: 300, y: 200 });
+  });
+
+  it('deleting an IF cascade-removes its stored frame size', () => {
+    let p = addNode(emptyProject(), { ...IF }, { x: 0, y: 0 });
+    expect(p.frameSizes.if1).toBeDefined();
+    p = removeNodes(p, ['if1']);
+    expect(p.frameSizes.if1).toBeUndefined();
   });
 });

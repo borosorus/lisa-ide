@@ -1,4 +1,5 @@
-import type { GraphNode, Vec2 } from './model';
+import { inputPorts, outputPorts } from './ports';
+import { IF_DEFAULT_SIZE, type GraphNode, type Vec2, type VisualProject } from './model';
 
 /**
  * Canvas-aware placement for newly created nodes. Pure and deterministic:
@@ -10,12 +11,27 @@ import type { GraphNode, Vec2 } from './model';
 export interface Size { readonly width: number; readonly height: number }
 export interface Rect { readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 
-/** Conservative card footprints; only separation quality depends on them. */
-export function nodeSize(kind: GraphNode['kind']): Size {
-  switch (kind) {
-    case 'call': return { width: 250, height: 104 };
-    case 'if': return { width: 220, height: 64 };
-    default: return { width: 180, height: 64 };
+/**
+ * Card footprints mirroring the rendered structure: a header plus one
+ * ~29px row per port row or inline control. Conservative on purpose —
+ * overestimating only spaces nodes further apart; underestimating lets
+ * cards collide. Deterministic: pure functions of the project.
+ */
+export function nodeSize(node: GraphNode, project: VisualProject): Size {
+  switch (node.kind) {
+    case 'call': {
+      // Call cards grow with their ABI: every input and output is its own row.
+      const rows = inputPorts(node, project).length + outputPorts(node, project).length;
+      return { width: 250, height: Math.max(96, 84 + rows * 29) };
+    }
+    case 'if':
+      return project.frameSizes?.[node.id] ?? IF_DEFAULT_SIZE;
+    case 'binary':
+      // Two input rows plus the operator row carrying the output.
+      return { width: 200, height: 137 };
+    default:
+      // Context/literal: the single control row also hosts the output handle.
+      return { width: 180, height: 79 };
   }
 }
 
@@ -47,6 +63,33 @@ export function spawnPosition(params: {
   return { x: base.x, y: base.y };
 }
 
+/**
+ * Spiral search that must stay inside `bounds`: returns the first free slot
+ * fully inside the rect, or null when none fits — never the out-of-bounds
+ * fallback spawnPosition uses for viewport placement.
+ */
+export function spawnPositionInBounds(params: {
+  anchor: Vec2;
+  size: Size;
+  occupied: readonly Rect[];
+  bounds: Rect;
+  gap?: number;
+}): Vec2 | null {
+  const gap = params.gap ?? 24;
+  const stepX = params.size.width + gap;
+  const stepY = params.size.height + gap;
+  const base = { x: params.anchor.x - params.size.width / 2, y: params.anchor.y - params.size.height / 2 };
+  for (let ring = 0; ring <= MAX_RING; ring++) {
+    for (const [dx, dy] of ringOffsets(ring)) {
+      const candidate = { x: base.x + dx * stepX, y: base.y + dy * stepY, width: params.size.width, height: params.size.height };
+      if (!inside(candidate, params.bounds)) continue;
+      if (params.occupied.some(rect => overlaps(candidate, rect, gap))) continue;
+      return { x: candidate.x, y: candidate.y };
+    }
+  }
+  return null;
+}
+
 /** Deterministic Chebyshev-ring order: top row L→R, right, bottom R→L, left. */
 function ringOffsets(ring: number): readonly (readonly [number, number])[] {
   if (ring === 0) return [[0, 0]];
@@ -63,13 +106,4 @@ function overlaps(a: Rect, b: Rect, gap: number): boolean {
 
 function inside(a: Rect, b: Rect): boolean {
   return a.x >= b.x && a.y >= b.y && a.x + a.width <= b.x + b.width && a.y + a.height <= b.y + b.height;
-}
-
-/** Rects of existing nodes from the canonical project, for occupancy checks. */
-export function occupiedRects(nodes: readonly GraphNode[], positions: Readonly<Record<string, Vec2>>): Rect[] {
-  return nodes.map(node => {
-    const size = nodeSize(node.kind);
-    const position = positions[node.id] ?? { x: 0, y: 0 };
-    return { x: position.x, y: position.y, width: size.width, height: size.height };
-  });
 }

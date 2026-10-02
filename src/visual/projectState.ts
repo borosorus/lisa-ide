@@ -1,7 +1,8 @@
 import {
-  createId,
-  type ContractResource, type GraphEdge, type GraphNode, type Vec2, type VisualProject,
+  clampFrameSize, createId, IF_DEFAULT_SIZE,
+  type ContractResource, type GraphEdge, type GraphNode, type IfFrameSize, type Vec2, type VisualProject,
 } from './model';
+import { expandIfFrames } from './containment';
 
 /**
  * Pure VisualProject transitions. Every edit to semantic data lives here so
@@ -32,11 +33,16 @@ export function removeContract(project: VisualProject, id: string): VisualProjec
 export function addNode(
   project: VisualProject, node: VisualProject['nodes'][number], position: Vec2,
 ): VisualProject {
-  return {
+  const added: VisualProject = {
     ...project,
     nodes: [...project.nodes, node],
     positions: { ...project.positions, [node.id]: position },
+    ...(node.kind === 'if'
+      ? { frameSizes: { ...project.frameSizes, [node.id]: IF_DEFAULT_SIZE } }
+      : {}),
   };
+  // Adding inside a frame may require the frame to grow around its new member.
+  return expandIfFrames(added);
 }
 
 export function setNodePosition(project: VisualProject, id: string, position: Vec2): VisualProject {
@@ -81,6 +87,7 @@ function dropNodes(project: VisualProject, ids: string[]): VisualProject {
     nodes,
     edges: project.edges.filter(e => touches(e, doomed) ? false : (idsAfter.has(e.from.node) && idsAfter.has(e.to.node))),
     positions: Object.fromEntries(Object.entries(project.positions).filter(([id]) => idsAfter.has(id))),
+    frameSizes: Object.fromEntries(Object.entries(project.frameSizes ?? {}).filter(([id]) => idsAfter.has(id))),
   };
 }
 
@@ -143,4 +150,41 @@ function patchParent(project: VisualProject, nodeId: string, parent: string | un
       return parent === undefined ? (rest as VisualProject['nodes'][number]) : { ...rest, parent } as VisualProject['nodes'][number];
     }),
   };
+}
+
+/**
+ * One batched canvas-move transition: apply every absolute position, then
+ * the validated parent changes, then persist any frame growth the batch
+ * caused. Batching matters — expanding after each intermediate position
+ * could grow a nested IF out of a half-moved drag.
+ */
+export function moveGraphNodes(
+  project: VisualProject,
+  changes: Readonly<Record<string, Vec2>>,
+  parents: Readonly<Record<string, string | null>> = {},
+): VisualProject {
+  let next = project;
+  for (const [id, position] of Object.entries(changes)) next = setNodePosition(next, id, position);
+  for (const [id, parent] of Object.entries(parents)) {
+    next = setNodeParent(next, id, parent === null ? undefined : parent);
+  }
+  return expandIfFrames(next);
+}
+
+/**
+ * User resize of an IF frame. Presentation only: positions and semantics
+ * are untouched. Sizes are clamped up to the minimum, and content that
+ * already needs more room keeps the frame at least that large.
+ */
+export function setNodeFrameSize(project: VisualProject, id: string, size: IfFrameSize): VisualProject {
+  const node = project.nodes.find(n => n.id === id);
+  if (!node || node.kind !== 'if') return project;
+  if (!Number.isFinite(size.width) || !Number.isFinite(size.height)) return project;
+  const clamped = clampFrameSize(size);
+  const current = project.frameSizes?.[id] ?? IF_DEFAULT_SIZE;
+  if (current.width === clamped.width && current.height === clamped.height) {
+    // Already at that size; only expansion via content can move it further.
+    return expandIfFrames(project);
+  }
+  return expandIfFrames({ ...project, frameSizes: { ...project.frameSizes, [id]: clamped } });
 }

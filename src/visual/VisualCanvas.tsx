@@ -8,7 +8,8 @@ import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flo
 import { canConnect } from './ports';
 import { absolutePosition, containmentTarget, descendants, iframes } from './containment';
 import { nodeSize } from './spawnPosition';
-import type { GraphNode, Vec2, VisualProject } from './model';
+import { indexDiagnostics, type GraphDiagnostic } from './validate';
+import type { GraphNode, IfFrameSize, Vec2, VisualProject } from './model';
 import { FUNCTION_MIME } from './ContractsPanel';
 
 const nodeTypes = { lisa: LisaNode };
@@ -29,10 +30,14 @@ export interface VisualCanvasProps {
   onConnect(from: { node: string; port: string }, to: { node: string; port: string }): void;
   /** Inline edit commit from a node card; semantics stay in the project layer. */
   onPatchNode(id: string, fields: Record<string, unknown>): void;
+  /** Committed IF frame resize; presentation metadata only. */
+  onResizeIf?(id: string, size: IfFrameSize): void;
   onSelectNode(id: string | null): void;
   onSelectEdge(id: string | null): void;
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
+  /** validateProject() findings; rendered on the nodes they belong to. */
+  diagnostics?: readonly GraphDiagnostic[];
   /** Last added node; the view pans to keep new nodes discoverable. */
   focusNodeId?: string | null;
   /** Host handle for click-to-add placement in the visible viewport. */
@@ -51,7 +56,7 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, focusNodeId, canvasApi,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, diagnostics, focusNodeId, canvasApi,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -101,6 +106,7 @@ function Canvas({
   }, []);
 
   const frames = useMemo(() => iframes(project), [project]);
+  const errorsByNode = useMemo(() => indexDiagnostics(diagnostics ?? []), [diagnostics]);
   const nodes = useMemo<Node[]>(() => {
     // xyflow resolves parentId against earlier entries, so ancestors must be
     // projected before their children; creation order stays otherwise.
@@ -121,15 +127,20 @@ function Canvas({
     return ordered.map(({ node }) => {
       const position = project.positions[node.id] ?? { x: 0, y: 0 };
       const frame = frames.get(node.id);
+      const data = {
+        node, project, frame,
+        errors: errorsByNode.get(node.id),
+        selected: node.id === selectedNodeId,
+      };
       // Container frames live behind cards so they never swallow a drag that
       // starts on an overlapping node; children always outrank their frame.
       const zIndex = node.kind === 'if' ? 1 : 10;
       const parentOk = node.parent !== undefined && project.nodes.some(n => n.id === node.parent && n.kind === 'if');
       if (!parentOk || node.parent === undefined) {
         return {
-          id: node.id, type: 'lisa', position, zIndex,
+          id: node.id, type: 'lisa', position, zIndex, selected: node.id === selectedNodeId,
           ...(frame ? { style: { width: frame.rect.width, height: frame.rect.height } } : {}),
-          data: { node, project, frame },
+          data,
         };
       }
       // React Flow nests transforms: children carry parent-relative positions.
@@ -139,10 +150,12 @@ function Canvas({
         parentId: node.parent,
         position: { x: position.x - parentAbs.x, y: position.y - parentAbs.y },
         zIndex,
-        data: { node, project, frame },
+        selected: node.id === selectedNodeId,
+        ...(frame ? { style: { width: frame.rect.width, height: frame.rect.height } } : {}),
+        data,
       };
     });
-  }, [project, frames]);
+  }, [project, frames, errorsByNode, selectedNodeId]);
 
   const edges = useMemo<Edge[]>(() => project.edges.map(edge => ({
     id: edge.id,
@@ -152,7 +165,7 @@ function Canvas({
     targetHandle: edge.to.port,
   })), [project.edges]);
 
-  const editApi = useMemo<NodeEditApi>(() => ({ patch: onPatchNode }), [onPatchNode]);
+  const editApi = useMemo<NodeEditApi>(() => ({ patch: onPatchNode, resize: onResizeIf }), [onPatchNode, onResizeIf]);
 
   const nodesRef = useRef(project.nodes);
   nodesRef.current = project.nodes;
@@ -226,7 +239,7 @@ function Canvas({
     // post-drag places when an IF was part of this drag.
     const excluded = new Set<string>([node.id, ...descendants(project, node.id)]);
     const target = containmentTarget({
-      movedRect: { ...changes[node.id], ...nodeSize(dragged.kind) },
+      movedRect: { ...changes[node.id], ...nodeSize(dragged, project) },
       frames: [...frames.values()].filter(f => !excluded.has(f.id)).map(f => {
         const after = changes[f.id];
         if (after === undefined) return f;

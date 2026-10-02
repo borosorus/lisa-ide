@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyProject, type ContractFunction, type GraphEdge, type GraphNode, type VisualProject } from './model';
-import { stableOrder, validateProject } from './validate';
+import { indexDiagnostics, stableOrder, validateProject } from './validate';
 
 const ADDRESS = '0x1111111111111111111111111111111111111111';
 const FNS: ContractFunction[] = [
@@ -17,7 +17,7 @@ interface Options {
 }
 
 function project({ nodes = [], edges = [], contracts = [{ id: 'c1', name: 'Vault', address: ADDRESS, functions: FNS }] }: Options): VisualProject {
-  return { contracts, nodes, edges, positions: {} };
+  return { contracts, nodes, edges, positions: {}, frameSizes: {} };
 }
 
 let edgeSeq = 0;
@@ -327,5 +327,20 @@ describe('stableOrder', () => {
     const { order, cycle } = stableOrder(p);
     expect(order).toEqual(['ok']);
     expect(cycle).toEqual(['x', 'y']);
+  });
+});
+
+describe('indexDiagnostics', () => {
+  it('groups messages and ports per node and drops node-less entries', () => {
+    const index = indexDiagnostics([
+      { message: 'global problem' },
+      { message: 'arg:0 is missing an input', node: 'call1', port: 'arg:0' },
+      { message: 'References a missing contract resource', node: 'call1' },
+      { message: 'cycle', node: 'op1' },
+    ]);
+    expect(index.get('call1')!.messages).toEqual(['arg:0 is missing an input', 'References a missing contract resource']);
+    expect([...index.get('call1')!.ports]).toEqual(['arg:0']);
+    expect(index.get('op1')!.ports.size).toBe(0);
+    expect(index.size).toBe(2);
   });
 });
