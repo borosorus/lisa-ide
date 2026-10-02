@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow,
-  type Connection, type Edge, type Node,
+  type Connection, type Edge, type Node, type NodeChange,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flowNodes';
@@ -107,6 +107,33 @@ function Canvas({
 
   const frames = useMemo(() => iframes(project), [project]);
   const errorsByNode = useMemo(() => indexDiagnostics(diagnostics ?? []), [diagnostics]);
+  /*
+   * Live drag preview. React Flow only moves nodes itself when it owns node
+   * state; this canvas is a controlled projection, so mid-drag positions
+   * arrive as onNodesChange events instead. They live in this transient map
+   * — keyed by node, in projection space — until the drop commits them to
+   * the project (or a cancel drops them). Semantics never see it.
+   */
+  const [dragPreview, setDragPreview] = useState<Readonly<Record<string, Vec2>>>({});
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    if (!changes.some(c => c.type === 'position')) return;
+    setDragPreview(current => {
+      let next = current;
+      let changed = false;
+      for (const change of changes) {
+        if (change.type !== 'position') continue;
+        if (change.dragging && change.position) {
+          next = { ...next, [change.id]: change.position };
+          changed = true;
+        } else if (next[change.id] !== undefined) {
+          const { [change.id]: _gone, ...rest } = next;
+          next = rest;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, []);
   const nodes = useMemo<Node[]>(() => {
     // xyflow resolves parentId against earlier entries, so ancestors must be
     // projected before their children; creation order stays otherwise.
@@ -126,6 +153,7 @@ function Canvas({
       .sort((a, b) => a.depth - b.depth || a.index - b.index);
     return ordered.map(({ node }) => {
       const position = project.positions[node.id] ?? { x: 0, y: 0 };
+      const preview = dragPreview[node.id];
       const frame = frames.get(node.id);
       const data = {
         node, project, frame,
@@ -138,7 +166,8 @@ function Canvas({
       const parentOk = node.parent !== undefined && project.nodes.some(n => n.id === node.parent && n.kind === 'if');
       if (!parentOk || node.parent === undefined) {
         return {
-          id: node.id, type: 'lisa', position, zIndex, selected: node.id === selectedNodeId,
+          id: node.id, type: 'lisa', position: preview ?? position, zIndex, selected: node.id === selectedNodeId,
+          ...(preview ? { dragging: true } : {}),
           ...(frame ? { style: { width: frame.rect.width, height: frame.rect.height } } : {}),
           data,
         };
@@ -148,14 +177,15 @@ function Canvas({
       return {
         id: node.id, type: 'lisa',
         parentId: node.parent,
-        position: { x: position.x - parentAbs.x, y: position.y - parentAbs.y },
+        position: preview ?? { x: position.x - parentAbs.x, y: position.y - parentAbs.y },
         zIndex,
         selected: node.id === selectedNodeId,
+        ...(preview ? { dragging: true } : {}),
         ...(frame ? { style: { width: frame.rect.width, height: frame.rect.height } } : {}),
         data,
       };
     });
-  }, [project, frames, errorsByNode, selectedNodeId]);
+  }, [project, frames, errorsByNode, selectedNodeId, dragPreview]);
 
   const edges = useMemo<Edge[]>(() => project.edges.map(edge => ({
     id: edge.id,
@@ -254,6 +284,7 @@ function Canvas({
     });
     const parents: Record<string, string | null> = {};
     if (target !== dragged.parent) parents[node.id] = target ?? null;
+    setDragPreview({});
     onMoveNodes(changes, parents);
   }, [project, frames, onMoveNodes]);
 
@@ -265,6 +296,7 @@ function Canvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
         fitView
         deleteKeyCode={null}
         proOptions={{ hideAttribution: true }}
