@@ -66,6 +66,14 @@ vi.mock('./visual/VisualCanvas', () => ({
       aria-label="simulate-resize-first-if"
       onClick={() => props.onResizeIf?.(props.project.nodes[0]?.id ?? '', { width: 700, height: 500 })}
     />
+    <button
+      aria-label="simulate-enable-else-first"
+      onClick={() => props.onEnableElse?.(props.project.nodes.find((n: { kind: string }) => n.kind === 'if')?.id ?? '')}
+    />
+    <button
+      aria-label="simulate-select-else-branch"
+      onClick={() => props.onSelectBranch?.(props.project.nodes.find((n: { kind: string }) => n.kind === 'if')?.id ?? '', 'else')}
+    />
   </>,
 }));
 
@@ -485,3 +493,44 @@ describe('App', () => {
 
 });
 
+
+describe('visual ELSE flows', () => {
+  beforeEach(() => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [{ id: 'c1', name: 'USDC', address: ADDRESS, functions: [{
+          signature: 'balanceOf(address)', name: 'balanceOf', inputs: ['address'], outputs: ['uint256'], mutability: 'view',
+        }] }],
+        nodes: [{ id: 'if1', kind: 'if' }],
+        edges: [],
+        positions: { if1: { x: 0, y: 0 } },
+        frameSizes: { if1: { width: 420, height: 260 } },
+      },
+    }));
+  });
+
+  it('the + ELSE action enables ELSE on the block and persists it', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-enable-else-first' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.nodes.find((n: { id: string }) => n.id === 'if1').hasElse).toBe(true);
+    });
+  });
+
+  it('click-to-add into the selected ELSE branch records parent and branch', async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-enable-else-first' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-select-else-branch' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Context' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      const added = saved.visual.nodes.find((n: { kind: string }) => n.kind === 'context');
+      expect(added).toMatchObject({ parent: 'if1', branch: 'else' });
+    });
+  });
+});

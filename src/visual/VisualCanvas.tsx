@@ -7,9 +7,9 @@ import '@xyflow/react/dist/style.css';
 import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
 import { absolutePosition, containmentTarget, descendants, iframes } from './containment';
-import { nodeSize } from './spawnPosition';
+import { nodeSize, type Rect } from './spawnPosition';
 import { indexDiagnostics, type GraphDiagnostic } from './validate';
-import type { GraphNode, IfFrameSize, Vec2, VisualProject } from './model';
+import type { GraphNode, IfFrameSize, ScopeTarget, Vec2, VisualProject } from './model';
 import { FUNCTION_MIME } from './ContractsPanel';
 
 const nodeTypes = { lisa: LisaNode };
@@ -23,7 +23,7 @@ export interface CanvasApi {
 
 export interface VisualCanvasProps {
   project: VisualProject;
-  onMoveNodes(changes: Readonly<Record<string, Vec2>>, parents?: Readonly<Record<string, string | null>>): void;
+  onMoveNodes(changes: Readonly<Record<string, Vec2>>, scopes?: Readonly<Record<string, ScopeTarget | null>>): void;
   onAddCallNode(contractId: string, signature: string, position: Vec2): void;
   onDeleteNodes(ids: string[]): void;
   onDeleteEdges(ids: string[]): void;
@@ -32,6 +32,12 @@ export interface VisualCanvasProps {
   onPatchNode(id: string, fields: Record<string, unknown>): void;
   /** Committed IF frame resize; presentation metadata only. */
   onResizeIf?(id: string, size: IfFrameSize): void;
+  /** Enable the ELSE branch of an IF block; semantic, one-way in this pass. */
+  onEnableElse?(id: string): void;
+  /** Click on a branch region: UI-only selection of the spawn target branch. */
+  onSelectBranch?(nodeId: string, branch: 'then' | 'else'): void;
+  /** UI-only spawn target: the branch region most recently selected. */
+  selectedBranch?: { nodeId: string; branch: 'then' | 'else' } | null;
   onSelectNode(id: string | null): void;
   onSelectEdge(id: string | null): void;
   selectedNodeId: string | null;
@@ -56,7 +62,7 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, diagnostics, focusNodeId, canvasApi,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onResizeIf, onEnableElse, onSelectBranch, selectedBranch, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, diagnostics, focusNodeId, canvasApi,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -131,6 +137,7 @@ function Canvas({
         node, project, frame,
         errors: errorsByNode.get(node.id),
         selected: node.id === selectedNodeId,
+        selectedBranch: selectedBranch?.nodeId === node.id ? selectedBranch.branch : undefined,
       };
       // Container frames live behind cards so they never swallow a drag that
       // starts on an overlapping node; children always outrank their frame.
@@ -155,7 +162,7 @@ function Canvas({
         data,
       };
     });
-  }, [project, frames, errorsByNode, selectedNodeId]);
+  }, [project, frames, errorsByNode, selectedNodeId, selectedBranch]);
 
   const edges = useMemo<Edge[]>(() => project.edges.map(edge => ({
     id: edge.id,
@@ -165,7 +172,12 @@ function Canvas({
     targetHandle: edge.to.port,
   })), [project.edges]);
 
-  const editApi = useMemo<NodeEditApi>(() => ({ patch: onPatchNode, resize: onResizeIf }), [onPatchNode, onResizeIf]);
+  const editApi = useMemo<NodeEditApi>(() => ({
+    patch: onPatchNode,
+    resize: onResizeIf,
+    enableElse: onEnableElse,
+    selectBranch: onSelectBranch,
+  }), [onPatchNode, onResizeIf, onEnableElse, onSelectBranch]);
 
   const nodesRef = useRef(project.nodes);
   nodesRef.current = project.nodes;
@@ -245,16 +257,23 @@ function Canvas({
         if (after === undefined) return f;
         const dx = after.x - saved(f.id).x;
         const dy = after.y - saved(f.id).y;
+        const shift = (r: Rect): Rect => ({ ...r, x: r.x + dx, y: r.y + dy });
         return {
           ...f,
-          rect: { ...f.rect, x: f.rect.x + dx, y: f.rect.y + dy },
-          body: { ...f.body, x: f.body.x + dx, y: f.body.y + dy },
+          rect: shift(f.rect), body: shift(f.body), thenBody: shift(f.thenBody),
+          ...(f.elseBody ? { elseBody: shift(f.elseBody) } : {}),
         };
       }),
     });
-    const parents: Record<string, string | null> = {};
-    if (target !== dragged.parent) parents[node.id] = target ?? null;
-    onMoveNodes(changes, parents);
+    const scopes: Record<string, ScopeTarget | null> = {};
+    const current: ScopeTarget | null = dragged.parent === undefined
+      ? null
+      : { parent: dragged.parent, branch: dragged.branch ?? 'then' };
+    const moved = target === undefined
+      ? current !== null
+      : current === null || current.parent !== target.parent || current.branch !== target.branch;
+    if (moved) scopes[node.id] = target ?? null;
+    onMoveNodes(changes, scopes);
   }, [project, frames, onMoveNodes]);
 
   return <div className="canvas-host" aria-label="Visual canvas" ref={hostRef}

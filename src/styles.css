@@ -64,3 +64,26 @@ body { background: #0b1220; }
 /* IF resize grip: quiet until hovered or the frame is selected. */
 .if-resize { position: absolute; right: -5px; bottom: -5px; width: 13px; height: 13px; border-radius: 3px; background: #f6c177; border: 1px solid #0b1220; opacity: 0; transition: opacity .12s; cursor: nwse-resize; }
 .lisa-node-if:hover .if-resize, .lisa-node-if.node-selected .if-resize, .if-resize:hover { opacity: 0.95; }
+
+/* IF branch regions: projection-only overlays, never interactive surfaces. */
+.lisa-node-if { position: relative; }
+.if-regions { position: absolute; inset: 0; pointer-events: none; }
+.if-region {
+  position: absolute; border: 1px dashed rgba(142, 189, 255, 0.16); border-radius: 8px;
+  background: rgba(142, 189, 255, 0.03);
+}
+.if-region-else { background: rgba(255, 180, 120, 0.04); border-color: rgba(255, 180, 120, 0.18); }
+.if-chip-anchor { position: absolute; }
+.if-branch-chip {
+  pointer-events: auto; border: 1px solid rgba(142, 189, 255, 0.35); background: rgba(11, 18, 32, 0.85);
+  color: #9db8e8; font: 600 10px/1.4 inherit; letter-spacing: 0.08em; padding: 1px 7px; border-radius: 7px;
+  cursor: pointer;
+}
+.if-branch-chip:hover { border-color: #8ebdff; color: #d8e7ff; }
+.if-branch-chip.branch-selected { border-color: #8ebdff; background: rgba(142, 189, 255, 0.18); color: #eaf2ff; }
+.if-enable-else {
+  pointer-events: auto; position: absolute; right: 22px; bottom: 10px;
+  border: 1px solid rgba(255, 180, 120, 0.45); background: rgba(11, 18, 32, 0.85);
+  color: #ffcda3; font: 600 11px/1.4 inherit; padding: 2px 9px; border-radius: 8px; cursor: pointer;
+}
+.if-enable-else:hover { border-color: #ffb478; background: rgba(255, 180, 120, 0.14); color: #ffe4cd; }

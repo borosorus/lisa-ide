@@ -6,7 +6,7 @@ export const LISA_ARTIFACT_FORMAT = 'lisa-program' as const;
 export const LISA_ARTIFACT_VERSION = 1 as const;
 export const LISA_ISA = 'lisa-v1' as const;
 export const LISA_TOOLCHAIN_NAME = 'lisa-tooling' as const;
-export const LISA_TOOLCHAIN_VERSION = '0.1.0';
+export const LISA_TOOLCHAIN_VERSION = '0.2.0';
 
 export interface ProgramArtifact {
   readonly format: typeof LISA_ARTIFACT_FORMAT;

@@ -12,13 +12,13 @@ import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas, type CanvasApi } from './visual/VisualCanvas';
 import {
-  addContract, addNode, connectPort, moveGraphNodes, removeContract, removeEdge, removeNodes,
+  addContract, addNode, connectPort, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes,
   setNodeFrameSize, updateContract, updateNode,
 } from './visual/projectState';
-import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type Vec2, type VisualProject } from './visual/model';
+import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type ScopeTarget, type Vec2, type VisualProject } from './visual/model';
 import { NodeInspector, VisualPalette } from './visual/NodePanel';
 import { nodeSize, spawnPosition } from './visual/spawnPosition';
-import { occupiedRects, spawnInsideIf } from './visual/containment';
+import { containmentTarget, iframes, occupiedRects, spawnInsideIf } from './visual/containment';
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import './styles.css';
@@ -56,6 +56,9 @@ export default function App() {
   const [generated, setGenerated] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  // UI-only spawn target: the branch region last clicked (§9). Cleared with
+  // the node selection; never persisted, never read by lowering.
+  const [selectedBranch, setSelectedBranch] = useState<{ nodeId: string; branch: 'then' | 'else' } | null>(null);
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [libraryTab, setLibraryTab] = useState(0);
   const [libraryOpen, setLibraryOpen] = useState(true);
@@ -102,12 +105,26 @@ export default function App() {
   function addCallNode(contractId: string, signature: string, anchor: Vec2) {
     const id = createId(project.nodes.map(n => n.id), 'call');
     setFocusNodeId(id);
-    editVisual(p => addNode(p, { id, kind: 'call', contractId, signature }, spawnNear(p, anchor, { id, kind: 'call', contractId, signature })));
+    editVisual(p => {
+      // A drop inside an IF body creates the call IN that branch: the drop
+      // point picks the semantic scope first, then placement near the point
+      // (collision-shifted). A top-level drop stays top-level.
+      const call: GraphNode = { id, kind: 'call', contractId, signature };
+      const target = containmentTarget({
+        movedRect: { x: anchor.x, y: anchor.y, width: 0, height: 0 },
+        frames: [...iframes(p).values()],
+      });
+      if (target) {
+        const placed = spawnInsideIf({ project: p, frameId: target.parent, branch: target.branch, size: nodeSize(call, p), anchor });
+        if (placed) return addNode(p, { ...call, parent: target.parent, branch: target.branch } as GraphNode, placed.position);
+      }
+      return addNode(p, call, spawnNear(p, anchor, call));
+    });
   }
 
-  function moveNodes(changes: Readonly<Record<string, Vec2>>, parents: Readonly<Record<string, string | null>> = {}) {
-    const semantic = Object.keys(parents).length > 0;
-    editVisual(p => moveGraphNodes(p, changes, parents), !semantic);
+  function moveNodes(changes: Readonly<Record<string, Vec2>>, scopes: Readonly<Record<string, ScopeTarget | null>> = {}) {
+    const semantic = Object.keys(scopes).length > 0;
+    editVisual(p => moveGraphNodes(p, changes, scopes), !semantic);
   }
 
   function addVisualNode(partial: GraphNodeDraft, prefix: string) {
@@ -117,17 +134,24 @@ export default function App() {
   }
 
   /**
-   * One creation funnel for palette adds and click-to-adds. A selected IF
-   * claims the new node: it spawns in a free slot of that frame's body
-   * (growing the frame when needed) and takes the semantic `parent`
-   * explicitly — never inferred from screen overlap. Without a selected IF
-   * the viewport spiral decides.
+   * One creation funnel for palette adds and click-to-adds. The selected
+   * branch region claims the new node when one was clicked; otherwise a
+   * selected IF claims it into THEN. The node spawns in a free slot of that
+   * branch body (growing the frame when needed) and takes the semantic
+   * parent/branch explicitly — never inferred from screen overlap. Without
+   * an IF context the viewport spiral decides.
    */
   function placeNode(p: VisualProject, node: GraphNode): VisualProject {
-    const selectedIf = selectedId !== null && p.nodes.some(n => n.id === selectedId && n.kind === 'if') ? selectedId : null;
-    if (selectedIf !== null && selectedIf !== node.id) {
-      const placed = spawnInsideIf({ project: p, frameId: selectedIf, size: nodeSize(node, p) });
-      if (placed) return addNode(p, { ...node, parent: selectedIf } as GraphNode, placed.position);
+    const scope: ScopeTarget | null = selectedBranch !== null
+      && p.nodes.some(n => n.id === selectedBranch.nodeId && n.kind === 'if'
+          && (selectedBranch.branch === 'then' || n.hasElse === true))
+      ? { parent: selectedBranch.nodeId, branch: selectedBranch.branch }
+      : selectedId !== null && p.nodes.some(n => n.id === selectedId && n.kind === 'if')
+        ? { parent: selectedId, branch: 'then' }
+        : null;
+    if (scope !== null && scope.parent !== node.id) {
+      const placed = spawnInsideIf({ project: p, frameId: scope.parent, branch: scope.branch, size: nodeSize(node, p) });
+      if (placed) return addNode(p, { ...node, parent: scope.parent, branch: scope.branch } as GraphNode, placed.position);
     }
     return addNode(p, node, spawnNear(p, viewportCenter(), node));
   }
@@ -336,6 +360,7 @@ export default function App() {
             onAddCallNode={addCallNode}
             onDeleteNodes={ids => {
               if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+              if (selectedBranch && ids.includes(selectedBranch.nodeId)) setSelectedBranch(null);
               editVisual(p => removeNodes(p, ids));
             }}
             onDeleteEdges={ids => {
@@ -345,7 +370,14 @@ export default function App() {
             onConnect={(from, to) => editVisual(p => connectPort(p, { from, to }))}
             onPatchNode={(id, fields) => editVisual(p => updateNode(p, id, fields))}
             onResizeIf={(id, size) => editVisual(p => setNodeFrameSize(p, id, size), true)}
-            onSelectNode={id => { setSelectedId(id); if (id !== null) setSelectedEdgeId(null); }}
+            onEnableElse={id => editVisual(p => enableElse(p, id))}
+            onSelectBranch={(nodeId, branch) => { setSelectedBranch({ nodeId, branch }); setSelectedId(nodeId); }}
+            selectedBranch={selectedBranch}
+            onSelectNode={id => {
+              setSelectedId(id);
+              if (id !== null) setSelectedEdgeId(null);
+              if (selectedBranch && selectedBranch.nodeId !== id) setSelectedBranch(null);
+            }}
             onSelectEdge={id => { setSelectedEdgeId(id); if (id !== null) setSelectedId(null); }}
             selectedNodeId={selectedId}
             selectedEdgeId={selectedEdgeId}

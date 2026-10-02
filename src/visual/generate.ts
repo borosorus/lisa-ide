@@ -1,6 +1,6 @@
 import {
   canonicalWordType, isReadFunction, outputHeadOffsets,
-  type ContractResource, type GraphEndpoint, type GraphNode, type VisualProject,
+  type ContractResource, type GraphEndpoint, type GraphNode, type IfBranch, type VisualProject,
 } from './model';
 import { findFunction } from './ports';
 import { stableOrder, validateProject, type GraphDiagnostic } from './validate';
@@ -60,7 +60,7 @@ export function generateVisualSource(project: VisualProject): string {
     }
   }
   const { order } = stableOrder(project);
-  emitScope(ctx, order, undefined, lines, 0);
+  emitScope(ctx, order, undefined, undefined, lines, 0);
   push(lines, '', 'return p;');
   return lines.join('\n');
 }
@@ -88,19 +88,34 @@ function collectUsedOutputs(project: VisualProject): Map<string, number[]> {
   return new Map([...used].map(([id, set]) => [id, [...set].sort((a, b) => a - b)]));
 }
 
-function emitScope(ctx: Context, order: readonly string[], parent: string | undefined, lines: string[], depth: number): void {
+function emitScope(
+  ctx: Context, order: readonly string[], parent: string | undefined, branch: IfBranch | undefined,
+  lines: string[], depth: number,
+): void {
   const pad = '  '.repeat(depth);
   for (const id of order) {
     const node = ctx.byId.get(id)!;
     if ((node.parent ?? undefined) !== parent) continue;
+    // Inside a block, branch membership is semantic; legacy children default
+    // to THEN. Positions and frame geometry never take part in emission.
+    if (parent !== undefined && (node.branch ?? 'then') !== branch) continue;
     if (node.kind === 'call') {
       if (depth === 0) push(lines, '');
       emitCall(ctx, node, lines, pad);
     } else if (node.kind === 'if') {
       if (depth === 0) push(lines, '');
-      lines.push(`${pad}p.if(${exprOf(ctx, id, 'condition')}, () => {`);
-      emitScope(ctx, order, id, lines, depth + 1);
-      lines.push(`${pad}});`);
+      const condition = exprOf(ctx, id, 'condition');
+      const thenBody: string[] = [];
+      emitScope(ctx, order, id, 'then', thenBody, depth + 1);
+      const elseBody: string[] = [];
+      const hasElse = node.kind === 'if' && node.hasElse === true;
+      if (hasElse) emitScope(ctx, order, id, 'else', elseBody, depth + 1);
+      // Empty bodies emit `() => {}` so output stays deterministic and
+      // readable; bodies with statements recurse naturally.
+      const body = (statements: string[]) =>
+        statements.length > 0 ? `() => {\n${statements.join('\n')}\n${pad}}` : '() => {}';
+      lines.push(`${pad}p.if(${condition}, ${body(thenBody)}`
+        + `${hasElse ? `, ${body(elseBody)}` : ''});`);
     }
   }
 }

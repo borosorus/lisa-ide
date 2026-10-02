@@ -1,6 +1,6 @@
 import {
   clampFrameSize, createId, IF_DEFAULT_SIZE,
-  type ContractResource, type GraphEdge, type GraphNode, type IfFrameSize, type Vec2, type VisualProject,
+  type ContractResource, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type ScopeTarget, type Vec2, type VisualProject,
 } from './model';
 import { expandIfFrames } from './containment';
 
@@ -102,11 +102,14 @@ export function connectPort(project: VisualProject, edge: Omit<GraphEdge, 'id'>)
   return addEdge({ ...project, edges: without }, edge);
 }
 
-/** Patch editable node fields; identity (id/kind/parent) stays stable. */
+/** Patch editable node fields; identity (id/kind/parent/branch) stays stable. */
 export function updateNode(project: VisualProject, id: string, patch: Record<string, unknown>): VisualProject {
+  // Scope transitions are semantic moves, not field patches — they go
+  // through setNodeScope so validation and growth stay in one place.
+  const { parent: _p, branch: _b, hasElse: _e, ...fields } = patch;
   return {
     ...project,
-    nodes: project.nodes.map(n => (n.id === id ? { ...n, ...patch, id: n.id, kind: n.kind } as GraphNode : n)),
+    nodes: project.nodes.map(n => (n.id === id ? { ...n, ...fields, id: n.id, kind: n.kind } as GraphNode : n)),
   };
 }
 
@@ -115,20 +118,24 @@ export function removeEdge(project: VisualProject, id: string): VisualProject {
 }
 
 /**
- * Assign or clear a node's IF parent. Rejected eagerly (project unchanged)
- * when the target is unknown, an IF into itself or a descendant, or a
- * non-IF node — validate.ts remains the final authority for stored graphs.
+ * Assign or clear a node's IF scope — its owning block and branch. The one
+ * semantic containment transition; every canvas gesture funnels here.
+ * Rejected eagerly (project unchanged) when the target is unknown, an IF
+ * into itself or a descendant, a non-IF node, or an ELSE branch of a block
+ * without ELSE. validate.ts remains the final authority for stored graphs.
  */
-export function setNodeParent(project: VisualProject, nodeId: string, parent: string | undefined): VisualProject {
+export function setNodeScope(project: VisualProject, nodeId: string, scope: ScopeTarget | null): VisualProject {
   const node = project.nodes.find(n => n.id === nodeId);
   if (!node) return project;
-  if (parent === undefined) {
-    if (node.parent === undefined) return project;
-    return patchParent(project, nodeId, undefined);
+  if (scope === null) {
+    if (node.parent === undefined && node.branch === undefined) return project;
+    return patchScope(project, nodeId, undefined, undefined);
   }
+  const { parent, branch } = scope;
   if (parent === nodeId) return project;
   const parentIf = project.nodes.find(n => n.id === parent);
   if (!parentIf || parentIf.kind !== 'if') return project;
+  if (branch === 'else' && parentIf.hasElse !== true) return project;
   // Walk the target's ancestors: assigning into own subtree would cycle.
   let ancestor: string | undefined = parent;
   const seen = new Set<string>();
@@ -137,37 +144,59 @@ export function setNodeParent(project: VisualProject, nodeId: string, parent: st
     seen.add(ancestor);
     ancestor = project.nodes.find(n => n.id === ancestor)?.parent;
   }
-  if (node.parent === parent) return project;
-  return patchParent(project, nodeId, parent);
+  if (node.parent === parent && node.branch === branch) return project;
+  return patchScope(project, nodeId, parent, branch);
 }
 
-function patchParent(project: VisualProject, nodeId: string, parent: string | undefined): VisualProject {
+/** Legacy containment calls (drag pre-ELSE): entering a block means THEN. */
+export function setNodeParent(project: VisualProject, nodeId: string, parent: string | undefined): VisualProject {
+  return setNodeScope(project, nodeId, parent === undefined ? null : { parent, branch: 'then' });
+}
+
+function patchScope(
+  project: VisualProject, nodeId: string, parent: string | undefined, branch: IfBranch | undefined,
+): VisualProject {
   return {
     ...project,
     nodes: project.nodes.map(n => {
       if (n.id !== nodeId) return n;
-      const { parent: _gone, ...rest } = n;
-      return parent === undefined ? (rest as VisualProject['nodes'][number]) : { ...rest, parent } as VisualProject['nodes'][number];
+      const { parent: _gone, branch: _goneB, ...rest } = n;
+      return parent === undefined
+        ? (rest as VisualProject['nodes'][number])
+        : { ...rest, parent, branch } as VisualProject['nodes'][number];
     }),
   };
 }
 
 /**
+ * Enable the ELSE branch of an IF block. The block gains a second sibling
+ * scope; the frame grows (persisted immediately) so both branches have a
+ * comfortable work area. Existing children keep their THEN membership.
+ */
+export function enableElse(project: VisualProject, id: string): VisualProject {
+  const node = project.nodes.find(n => n.id === id);
+  if (!node || node.kind !== 'if' || node.hasElse === true) return project;
+  const next = {
+    ...project,
+    nodes: project.nodes.map(n => (n.id === id ? { ...n, hasElse: true } : n)),
+  };
+  return expandIfFrames(next);
+}
+
+/**
  * One batched canvas-move transition: apply every absolute position, then
- * the validated parent changes, then persist any frame growth the batch
+ * the validated scope changes, then persist any frame growth the batch
  * caused. Batching matters — expanding after each intermediate position
  * could grow a nested IF out of a half-moved drag.
  */
 export function moveGraphNodes(
   project: VisualProject,
   changes: Readonly<Record<string, Vec2>>,
-  parents: Readonly<Record<string, string | null>> = {},
+  scopes: Readonly<Record<string, ScopeTarget | null>> = {},
 ): VisualProject {
   let next = project;
   for (const [id, position] of Object.entries(changes)) next = setNodePosition(next, id, position);
-  for (const [id, parent] of Object.entries(parents)) {
-    next = setNodeParent(next, id, parent === null ? undefined : parent);
-  }
+  for (const [id, scope] of Object.entries(scopes)) next = setNodeScope(next, id, scope);
   return expandIfFrames(next);
 }
 

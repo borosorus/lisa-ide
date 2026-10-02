@@ -21,7 +21,7 @@ describe('restricted LISA source', () => {
     expect(artifact).toEqual({
       format: 'lisa-program', version: 1, isa: 'lisa-v1',
       program: output.program, programHash: output.programHash,
-      compiler: { name: 'lisa-tooling', version: '0.1.0' },
+      compiler: { name: 'lisa-tooling', version: '0.2.0' },
     });
     expect(parseArtifact(JSON.stringify(artifact))).toEqual(artifact);
   });
@@ -84,5 +84,46 @@ describe('restricted LISA source', () => {
     } catch (error) {
       expect(error).toMatchObject({ line: 2 });
     }
+  });
+});
+
+describe('p.if with ELSE (0.2.0)', () => {
+  const cond = 'CALLER.eq(0n)';
+  it('accepts the three-argument form and compiles', () => {
+    const src = `const p = createProgram();
+p.if(${cond}, () => { p.staticCall(SELF, encodeCall("a()")); }, () => { p.staticCall(SELF, encodeCall("b()")); });
+return p;`;
+    const result = compileSource(src);
+    expect(result.program).toMatch(/^0x[0-9a-f]+$/);
+    expect(result.program.length).toBeGreaterThan(4);
+  });
+
+  it('still accepts the two-argument form', () => {
+    const src = `const p = createProgram();
+p.if(${cond}, () => { p.staticCall(SELF, encodeCall("a()")); });
+return p;`;
+    expect(compileSource(src).program).toMatch(/^0x[0-9a-f]+$/);
+  });
+
+  it('rejects one-argument and four-argument calls', () => {
+    expect(() => evaluateSource(`const p = createProgram();\np.if(${cond});\nreturn p;`)).toThrow(SourceError);
+    const four = `const p = createProgram();
+p.if(${cond}, () => {}, () => {}, () => {});
+return p;`;
+    expect(() => evaluateSource(four)).toThrow(/one or two callbacks/);
+  });
+
+  it('rejects a non-arrow third callback', () => {
+    const src = `const p = createProgram();
+p.if(${cond}, () => {}, "nope");
+return p;`;
+    expect(() => evaluateSource(src)).toThrow(/arrow callbacks/);
+  });
+
+  it('keeps callback restrictions for the else body too', () => {
+    const src = `const p = createProgram();
+p.if(${cond}, () => {}, async () => {});
+return p;`;
+    expect(() => evaluateSource(src)).toThrow(SourceError);
   });
 });

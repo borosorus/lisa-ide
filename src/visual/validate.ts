@@ -1,7 +1,7 @@
 import {
   inputPorts, outputPorts, canConnect, type PortSpec,
 } from './ports';
-import { isValidLiteral, type GraphNode, type VisualProject } from './model';
+import { isValidLiteral, type GraphNode, type IfBranch, type VisualProject } from './model';
 
 /**
  * Graph-level validation and deterministic ordering, run before lowering.
@@ -71,6 +71,16 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
       }
       parent = parentIf.parent;
     }
+    // Branch invariants: membership is semantic and only exists inside a block.
+    if (node.parent === undefined && node.branch !== undefined) {
+      diagnostics.push({ node: node.id, message: 'Names an IF branch without belonging to an IF block' });
+    }
+    if (node.branch === 'else') {
+      const directParent = node.parent === undefined ? undefined : byId.get(node.parent);
+      if (directParent?.kind === 'if' && directParent.hasElse !== true) {
+        diagnostics.push({ node: node.id, message: 'Sits in an ELSE branch, but its IF block has no ELSE' });
+      }
+    }
     if (node.kind === 'call') {
       const contract = project.contracts.find(c => c.id === node.contractId);
       if (!contract) diagnostics.push({ node: node.id, message: 'References a missing contract resource' });
@@ -108,13 +118,9 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     drivers.set(key, (drivers.get(key) ?? 0) + 1);
     if (source.id === target.id) {
       diagnostics.push({ node: source.id, message: 'Node feeds itself' });
-    } else if (!inScope(source, target, byId)) {
-      // Also governs result edges: the builder decodes return data in the
-      // call's scope or any block nested inside it, but never shallower.
-      diagnostics.push({
-        node: target.id,
-        message: 'Value produced inside an IF block cannot be used outside that block',
-      });
+    } else {
+      const violation = scopeViolation(source, target, byId);
+      if (violation) diagnostics.push({ node: target.id, message: violation });
     }
   }
   for (const node of project.nodes) {
@@ -172,27 +178,44 @@ export function stableOrder(project: VisualProject): { order: string[]; cycle: s
   return { order, cycle: project.nodes.filter(n => !done.has(n.id)).map(n => n.id) };
 }
 
-/** Ids of IF blocks enclosing a node, outermost first. */
-export function scopeChain(node: GraphNode, byId: Map<string, GraphNode>): string[] {
-  const chain: string[] = [];
+/** IF scopes enclosing a node, outermost first, each identified by block + branch.
+ *  A nested IF belongs to its parent's branch; its own THEN/ELSE entries appear
+ *  only in the chains of nodes inside its body. Children saved before ELSE
+ *  existed carry no branch and count as THEN. */
+export function scopeChain(node: GraphNode, byId: Map<string, GraphNode>): { id: string; branch: IfBranch }[] {
+  const chain: { id: string; branch: IfBranch }[] = [];
+  let child: GraphNode = node;
   let parent = node.parent;
   const guard = new Set<string>([node.id]);
   while (parent !== undefined && !guard.has(parent)) {
     guard.add(parent);
-    chain.push(parent);
+    chain.push({ id: parent, branch: child.branch === 'else' ? 'else' : 'then' });
+    child = byId.get(parent) ?? child;
     parent = byId.get(parent)?.parent;
   }
   return chain.reverse();
 }
 
-/** A value may only flow into an equal-or-deeper scope than it was produced in. */
-function inScope(source: GraphNode, target: GraphNode, byId: Map<string, GraphNode>): boolean {
+/**
+ * Why a value may not flow from source to target, or undefined when the
+ * flow is legal: the source's scope chain must be a prefix of the target's
+ * (same scope or a descendant). Also governs result edges: the builder
+ * decodes return data in the call's branch and any block nested inside it,
+ * never across a sibling or after the join.
+ */
+export function scopeViolation(source: GraphNode, target: GraphNode, byId: Map<string, GraphNode>): string | undefined {
   const sourceScope = scopeChain(source, byId);
   const targetScope = scopeChain(target, byId);
-  if (sourceScope.length <= targetScope.length) {
-    return sourceScope.every((id, index) => targetScope[index] === id);
+  const shared = Math.min(sourceScope.length, targetScope.length);
+  for (let i = 0; i < shared; i++) {
+    if (sourceScope[i].id !== targetScope[i].id || sourceScope[i].branch !== targetScope[i].branch) {
+      return 'Value was produced in a different IF branch; branches are separate scopes and never share values';
+    }
   }
-  return false;
+  if (sourceScope.length > targetScope.length) {
+    return 'Value produced inside an IF block cannot be used outside that block';
+  }
+  return undefined;
 }
 
 export type { PortSpec };

@@ -339,3 +339,118 @@ describe('presentation cannot reach lowering', () => {
     expect(generateVisualSource(twin)).toBe(generateVisualSource(base));
   });
 });
+
+describe('ELSE generation', () => {
+  function elseProject(withElse = true): VisualProject {
+    const nodes: GraphNode[] = [
+      { id: 'self1', kind: 'context', name: 'SELF' },
+      { id: 'if1', kind: 'if', ...(withElse ? { hasElse: true } : {}) },
+      { id: 't1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1', branch: 'then' },
+      { id: 'cmp1', kind: 'binary', op: 'gt' },
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '5' },
+      ...(withElse
+        ? [{ id: 'e1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1', branch: 'else' } as GraphNode]
+        : []),
+    ];
+    const edges: GraphEdge[] = [
+      { id: 'g1', from: { node: 'self1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+      { id: 'g2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
+      { id: 'g3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+      { id: 'g4', from: { node: 'self1', port: 'out' }, to: { node: 't1', port: 'arg:0' } },
+      ...(withElse
+        ? [{ id: 'g5', from: { node: 'self1', port: 'out' }, to: { node: 'e1', port: 'arg:0' } } as GraphEdge]
+        : []),
+    ];
+    return {
+      contracts: [{ id: 'c1', name: 'Token', address: USDC, functions: TOKEN_FNS }],
+      nodes, edges,
+      positions: { self1: { x: 0, y: 0 }, if1: { x: 0, y: 100 }, t1: { x: 30, y: 160 }, e1: { x: 470, y: 160 }, cmp1: { x: 0, y: 40 }, lit1: { x: 220, y: 40 } },
+      frameSizes: { if1: { width: 800, height: 300 } },
+    };
+  }
+
+  it('emits the two-argument form when ELSE is absent', () => {
+    const src = generateVisualSource(elseProject(false));
+    expect(src).toContain('p.if((');
+    expect(src.match(/=> \{\}, \(\) => \{\}\);/g)).toBeNull();
+    const body = src.split('p.if(')[1];
+    expect(body.indexOf(') => {')).toBeGreaterThan(-1);
+    expect(src).not.toMatch(/\}, \(\) =>/);
+  });
+
+  it('emits the three-argument form with distinct branch bodies', () => {
+    const src = generateVisualSource(elseProject());
+    const elseArrow = src.search(/\}, \(\) => \{/);
+    expect(elseArrow).toBeGreaterThan(-1);
+    const open = src.indexOf('p.if(');
+    const callT = src.indexOf('balanceOf(address)', open);
+    const callE = src.indexOf('balanceOf(address)', elseArrow);
+    expect(callT).toBeGreaterThan(open);
+    expect(callT).toBeLessThan(elseArrow);
+    expect(callE).toBeGreaterThan(elseArrow);
+    expect(() => compileSource(src)).not.toThrow();
+  });
+
+  it('keeps decoded call outputs inside their branch body', () => {
+    const p = elseProject();
+    const used = (id: string): VisualProject => ({
+      ...p,
+      contracts: [...p.contracts, { id: 'c2', name: 'Vault', address: VAULT, functions: VAULT_FNS }],
+      edges: [...p.edges, { id: 'x1', from: { node: id, port: 'out:0' }, to: { node: id === 't1' ? 't2' : 'e2', port: 'arg:0' } }],
+      nodes: [...p.nodes, { id: id === 't1' ? 't2' : 'e2', kind: 'call', contractId: 'c2', signature: 'deposit(uint256)', parent: 'if1', branch: id === 't1' ? 'then' : 'else' }],
+    });
+    const thenSrc = generateVisualSource(used('t1'));
+    const split = thenSrc.search(/\}, \(\) => \{/);
+    expect(thenSrc.indexOf('const balanceOf_t1')).toBeLessThan(split);
+    expect(thenSrc.indexOf('encodeCall("deposit(uint256)"')).toBeLessThan(split);
+    const elseSrc = generateVisualSource(used('e1'));
+    const split2 = elseSrc.search(/\}, \(\) => \{/);
+    expect(elseSrc.indexOf('const balanceOf_e1')).toBeGreaterThan(split2);
+    expect(elseSrc.indexOf('encodeCall("deposit(uint256)"')).toBeGreaterThan(split2);
+    expect(() => compileSource(thenSrc)).not.toThrow();
+    expect(() => compileSource(elseSrc)).not.toThrow();
+  });
+
+  it('emits an empty ELSE deterministically and compiles', () => {
+    const base = elseProject();
+    const p: VisualProject = {
+      ...base,
+      nodes: base.nodes.filter(n => !(n.parent === 'if1' && n.branch === 'else')),
+      edges: base.edges.filter(e => e.from.node !== 'e1' && e.to.node !== 'e1'),
+    };
+    const src = generateVisualSource(p);
+    expect(src).toMatch(/\}, \(\) => \{\}\);/);
+    expect(generateVisualSource(p)).toBe(src);
+    expect(() => compileSource(src)).not.toThrow();
+  });
+
+  it('recurses through nested IF/ELSE naturally and is presentation-independent', () => {
+    const base = elseProject();
+    const nested: VisualProject = {
+      ...base,
+      nodes: [
+        ...base.nodes,
+        { id: 'if2', kind: 'if', parent: 'if1', branch: 'else', hasElse: true },
+        { id: 'e2', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if2', branch: 'else' },
+        { id: 'lit2', kind: 'literal', literalType: 'address', literal: USDC },
+      ],
+      edges: [
+        ...base.edges,
+        { id: 'n1', from: { node: 'lit2', port: 'out' }, to: { node: 'e2', port: 'arg:0' } },
+        { id: 'n2', from: { node: 'cmp1', port: 'out' }, to: { node: 'if2', port: 'condition' } },
+      ],
+      positions: { ...base.positions, if2: { x: 470, y: 240 }, e2: { x: 850, y: 300 }, lit2: { x: 0, y: -80 } },
+    };
+    const src = generateVisualSource(nested);
+    expect(src.match(/p\.if\(/g)?.length).toBe(2);
+    const inner = src.slice(src.indexOf('p.if(', src.indexOf('p.if(') + 1));
+    expect(inner).toMatch(/\}, \(\) => \{/);
+    expect(() => compileSource(src)).not.toThrow();
+    const moved: VisualProject = {
+      ...nested,
+      positions: Object.fromEntries(Object.entries(nested.positions).map(([k, v]) => [k, { x: v.x + 1234, y: v.y - 777 }])),
+      frameSizes: { if1: { width: 9999, height: 1234 }, if2: { width: 777, height: 321 } },
+    };
+    expect(generateVisualSource(moved)).toBe(src);
+  });
+});

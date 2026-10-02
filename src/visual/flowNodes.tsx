@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Handle, Position, useUpdateNodeInternals, useViewport, type NodeProps } from '@xyflow/react';
 import { inputPorts, outputPorts, type PortSpec } from './ports';
 import type { Frame } from './containment';
-import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfFrameSize, type LiteralType, type VisualProject } from './model';
+import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfBranch, type IfFrameSize, type LiteralType, type VisualProject } from './model';
 import type { NodeErrors } from './validate';
 
 /**
@@ -16,6 +16,10 @@ export interface NodeEditApi {
   patch(nodeId: string, fields: Record<string, unknown>): void;
   /** Persist a user resize of an IF frame; presentation only. */
   resize?(nodeId: string, size: IfFrameSize): void;
+  /** Give an IF block an ELSE branch; semantic, via projectState. */
+  enableElse?(nodeId: string): void;
+  /** UI-only: mark a branch region as the spawn target. */
+  selectBranch?(nodeId: string, branch: 'then' | 'else'): void;
 }
 
 export const NodeEditContext = createContext<NodeEditApi | null>(null);
@@ -29,6 +33,8 @@ export interface LisaNodeData extends Record<string, unknown> {
   errors?: NodeErrors;
   /** True for the currently selected node. */
   selected?: boolean;
+  /** UI-only spawn target when this IF's region was last clicked. */
+  selectedBranch?: IfBranch;
 }
 
 /** Props every inline control needs so canvas gestures don't intercept it. */
@@ -61,7 +67,7 @@ export function nodeLabel(node: GraphNode, project: VisualProject): string {
 const OP_GLYPH: Record<BinaryOp, string> = { add: '+', sub: '−', mul: '×', div: '÷', lt: '<', gt: '>', eq: '=' };
 
 export function LisaNode({ id, data }: NodeProps) {
-  const { node, project, frame, errors, selected } = data as unknown as LisaNodeData;
+  const { node, project, frame, errors, selected, selectedBranch } = data as unknown as LisaNodeData;
   const edit = useContext(NodeEditContext);
   const inputs = inputPorts(node, project);
   const outputs = outputPorts(node, project);
@@ -138,8 +144,51 @@ export function LisaNode({ id, data }: NodeProps) {
         className={`port port-${port.kind}${port.connectable === false ? ' port-blocked' : ''}${bad(port.name) ? ' port-invalid' : ''}`}
         title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`} />
     </div>)}
-    {node.kind === 'if' && frame && <IfResizeGrip frame={frame} edit={edit} />}
+    {node.kind === 'if' && frame && <>
+      <IfBranchRegions frame={frame} hasElse={node.kind === 'if' && node.hasElse === true} selectedBranch={selectedBranch} edit={edit} />
+      <IfResizeGrip frame={frame} edit={edit} />
+    </>}
     {selected && errors !== undefined && errors.messages.length > 0 && <div className="node-error-text" role="alert">{errors.messages[0]}</div>}
+  </div>;
+}
+
+/**
+ * THEN/ELSE work areas of an IF frame. The regions are a projection of the
+ * frame geometry and carry no drop handling — containment is computed from
+ * the semantic model on drop. Only the small affordances are interactive:
+ * the branch labels pick the click-spawn target, and "+ ELSE" performs the
+ * one semantic action on offer.
+ */
+function IfBranchRegions({ frame, hasElse, selectedBranch, edit }: {
+  frame: Frame; hasElse: boolean; selectedBranch?: IfBranch; edit: NodeEditApi | null;
+}) {
+  const stop = stopEvents();
+  const rel = (r: { x: number; y: number; width: number; height: number }) => ({
+    left: r.x - frame.rect.x, top: r.y - frame.rect.y, width: r.width, height: r.height,
+  });
+  const chip = (branch: IfBranch, r: { x: number; y: number }) => (
+    <button type="button"
+      className={`if-branch-chip nodrag${selectedBranch === branch ? ' branch-selected' : ''}`}
+      aria-label={`${branch === 'then' ? 'Then' : 'Else'} branch — click to spawn new nodes here`}
+      {...stop}
+      onClick={e => { (stop.onClick as (ev: React.MouseEvent) => void)(e); edit?.selectBranch?.(frame.id, branch); }}>
+      {branch === 'then' ? 'THEN' : 'ELSE'}
+    </button>
+  );
+  return <div className="if-regions">
+    <div className="if-region" style={rel(frame.thenBody)} />
+    <span className="if-chip-anchor" style={{ left: rel(frame.thenBody).left + 8, top: rel(frame.thenBody).top + 6 }}>{chip('then', frame.thenBody)}</span>
+    {hasElse && frame.elseBody && <>
+      <div className="if-region if-region-else" style={rel(frame.elseBody)} />
+      <span className="if-chip-anchor" style={{ left: rel(frame.elseBody).left + 8, top: rel(frame.elseBody).top + 6 }}>{chip('else', frame.elseBody)}</span>
+    </>}
+    {!hasElse && (
+      <button type="button" className="if-enable-else nodrag" title="Add an ELSE branch to this IF"
+        {...stop}
+        onClick={e => { (stop.onClick as (ev: React.MouseEvent) => void)(e); edit?.enableElse?.(frame.id); }}>
+        + ELSE
+      </button>
+    )}
   </div>;
 }
 

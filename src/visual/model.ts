@@ -125,10 +125,24 @@ export function isValidLiteral(type: LiteralType, text: string): boolean {
     : text === 'true' || text === 'false';
 }
 
+/** Which sibling scope of a parent IF a node belongs to. Semantic, not layout. */
+export type IfBranch = 'then' | 'else';
+
+/** Semantic scope of a node nested in an IF: its owning block and branch. */
+export interface ScopeTarget {
+  readonly parent: string;
+  readonly branch: IfBranch;
+}
+
 interface NodeBase {
   readonly id: string;
   /** Id of the IfNode whose body contains this node; absent at top level. */
   readonly parent?: string;
+  /**
+   * Which branch of `parent` holds this node. Present exactly when `parent`
+   * is; children saved before ELSE existed are migrated to 'then'.
+   */
+  readonly branch?: IfBranch;
 }
 
 export type GraphNode =
@@ -136,7 +150,7 @@ export type GraphNode =
   | (NodeBase & { readonly kind: 'context'; readonly name: ContextName })
   | (NodeBase & { readonly kind: 'literal'; readonly literalType: LiteralType; readonly literal: string })
   | (NodeBase & { readonly kind: 'binary'; readonly op: BinaryOp })
-  | (NodeBase & { readonly kind: 'if' });
+  | (NodeBase & { readonly kind: 'if'; readonly hasElse?: boolean });
 
 export interface GraphEndpoint {
   readonly node: string;

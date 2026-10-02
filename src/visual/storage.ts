@@ -2,7 +2,7 @@ import { SOURCE_STORAGE_KEY } from '../editor/sourceStorage';
 import {
   BINARY_OPS, clampFrameSize, CONTEXT_NAMES, canonicalWordType, isValidLiteral, outputHeadOffsets,
   emptyProject,
-  type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type IfFrameSize, type Vec2, type VisualProject,
+  type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type Vec2, type VisualProject,
 } from './model';
 import { canonicalInputType, isValidAddress } from './abi';
 import type { ContractFunction, ContractResource } from './model';
@@ -106,6 +106,20 @@ function parseVisual(value: unknown): VisualProject {
   }
   const nodeIds = new Set(nodes.map(n => n.id));
   const ifIds = new Set(nodes.filter(n => n.kind === 'if').map(n => n.id));
+  // Explicit branch migration: every child of a block belongs to one. Saves
+  // from before ELSE existed carry no branch and become THEN; ELSE
+  // membership under a block that lost (or never had) the flag is repaired
+  // to THEN rather than dropped.
+  const elseEnabled = new Set(nodes.filter(n => n.kind === 'if' && n.hasElse === true).map(n => n.id));
+  for (const [index, node] of nodes.entries()) {
+    if (node.parent === undefined || node.branch !== undefined) continue;
+    nodes[index] = { ...node, branch: 'then' };
+  }
+  for (const [index, node] of nodes.entries()) {
+    if (node.branch === 'else' && node.parent !== undefined && ifIds.has(node.parent) && !elseEnabled.has(node.parent)) {
+      nodes[index] = { ...node, branch: 'then' };
+    }
+  }
   const parsedEdges = parseItems(value.edges, parseEdge, 'edges');
   // Fold the old explicit-decoder graphs onto the call's own output ports.
   const { kept, legacy } = splitLegacyEdges(parsedEdges, new Set(decoders.keys()));
@@ -171,7 +185,16 @@ function signatureMatches(signature: string, name: string, inputs: readonly stri
 function parseNode(value: unknown): GraphNode | null {
   if (!isRecord(value) || typeof value.id !== 'string' || value.id.length === 0) return null;
   if (value.parent !== undefined && typeof value.parent !== 'string') return null;
-  const base = value.parent === undefined ? { id: value.id } : { id: value.id, parent: value.parent as string };
+  if (value.branch !== undefined && value.branch !== 'then' && value.branch !== 'else') return null;
+  if (value.hasElse !== undefined && typeof value.hasElse !== 'boolean') return null;
+  // Branch metadata exists exactly inside a block; a stray branch on a
+  // top-level node is stripped rather than losing the node.
+  const base = value.parent === undefined
+    ? { id: value.id }
+    : {
+        id: value.id, parent: value.parent as string,
+        ...(value.branch === undefined ? {} : { branch: value.branch as IfBranch }),
+      };
   switch (value.kind) {
     case 'call':
       if (typeof value.contractId !== 'string' || typeof value.signature !== 'string') return null;
@@ -189,7 +212,7 @@ function parseNode(value: unknown): GraphNode | null {
       if (!BINARY_OPS.includes(value.op as never)) return null;
       return { ...base, kind: 'binary', op: value.op as BinaryOp };
     case 'if':
-      return { ...base, kind: 'if' };
+      return { ...base, kind: 'if', ...(value.hasElse === true ? { hasElse: true } : {}) };
     default:
       return null;
   }

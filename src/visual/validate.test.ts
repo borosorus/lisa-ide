@@ -344,3 +344,115 @@ describe('indexDiagnostics', () => {
     expect(index.size).toBe(2);
   });
 });
+
+describe('branch-aware scope validation', () => {
+  const IF1: GraphNode = { id: 'if1', kind: 'if', hasElse: true };
+  const IF2: GraphNode = { id: 'if2', kind: 'if', parent: 'if1', branch: 'then' };
+  const lit = (id: string, extra: Partial<GraphNode> = {}): GraphNode =>
+    ({ id, kind: 'literal', literalType: 'address', literal: ADDRESS, ...extra }) as GraphNode;
+  const call = (id: string, extra: Partial<GraphNode> = {}): GraphNode =>
+    ({ id, kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', ...extra }) as GraphNode;
+  const edge = (from: string, to: string): GraphEdge =>
+    ({ id: `${from}->${to}`, from: { node: from, port: 'out' }, to: { node: to, port: 'arg:0' } });
+
+  it('top-level values may feed either branch', () => {
+    const p = project({ nodes: [IF1, lit('a'), call('t', { parent: 'if1', branch: 'then' }), call('e', { parent: 'if1', branch: 'else' })],
+      edges: [edge('a', 't'), edge('a', 'e')] });
+    expect(validateProject(p).filter(d => d.message.includes('scope') || d.message.includes('branch') || d.message.includes('outside'))).toEqual([]);
+  });
+
+  it('rejects THEN -> ELSE and ELSE -> THEN crossings', () => {
+    const p = project({ nodes: [IF1, lit('t', { parent: 'if1', branch: 'then' }), call('e', { parent: 'if1', branch: 'else' })],
+      edges: [edge('t', 'e')] });
+    const hits = validateProject(p).filter(d => d.node === 'e');
+    expect(hits.length).toBe(1);
+    expect(hits[0].message).toMatch(/different IF branch/);
+    const flipped = project({ nodes: [IF1, lit('e', { parent: 'if1', branch: 'else' }), call('t', { parent: 'if1', branch: 'then' })],
+      edges: [edge('e', 't')] });
+    expect(validateProject(flipped).some(d => d.node === 't' && d.message.includes('different IF branch'))).toBe(true);
+  });
+
+  it('checks scope through IF condition and payable value ports', () => {
+    // if2 lives in if1:then; an if1:else value may not feed its condition.
+    const cond = project({
+      nodes: [IF1, { id: 'if2', kind: 'if', parent: 'if1', branch: 'then' },
+        lit('bad', { literalType: 'bool', literal: 'true', parent: 'if1', branch: 'else' }),
+        lit('ok', { literalType: 'bool', literal: 'false' })],
+      edges: [
+        { id: 'c1e', from: { node: 'bad', port: 'out' }, to: { node: 'if2', port: 'condition' } },
+        { id: 'c2e', from: { node: 'ok', port: 'out' }, to: { node: 'if1', port: 'condition' } }],
+    });
+    expect(validateProject(cond).some(d => d.node === 'if2' && d.message.includes('different IF branch'))).toBe(true);
+
+    // A payable call's value port is a normal edge target; branch rules hold.
+    const payable = project({
+      nodes: [IF1,
+        { id: 'stake', kind: 'call', contractId: 'c1', signature: 'stake()', parent: 'if1', branch: 'then' } as GraphNode,
+        lit('amt', { kind: 'literal', literalType: 'uint', literal: '7', parent: 'if1', branch: 'else' } as GraphNode)],
+      edges: [{ id: 'v', from: { node: 'amt', port: 'out' }, to: { node: 'stake', port: 'value' } }],
+    });
+    expect(validateProject(payable).some(d => d.node === 'stake' && d.message.includes('different IF branch'))).toBe(true);
+  });
+
+  it('lets one top-level decoded output feed both branches', () => {
+    const p = project({
+      nodes: [IF1,
+        { id: 'read', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)' } as GraphNode,
+        lit('a'),
+        call('t', { parent: 'if1', branch: 'then' }),
+        call('e', { parent: 'if1', branch: 'else' })],
+      edges: [
+        { id: 'r', from: { node: 'a', port: 'out' }, to: { node: 'read', port: 'arg:0' } },
+        { id: 't', from: { node: 'read', port: 'out:0' }, to: { node: 't', port: 'arg:0' } },
+        { id: 'e', from: { node: 'read', port: 'out:0' }, to: { node: 'e', port: 'arg:0' } }],
+    });
+    expect(validateProject(p).filter(d => d.message.includes('branch') || d.message.includes('outside'))).toEqual([]);
+  });
+
+  it('rejects branch values escaping to after the IF', () => {
+    const p = project({ nodes: [IF1, lit('t', { parent: 'if1', branch: 'then' }), call('top')], edges: [edge('t', 'top')] });
+    expect(validateProject(p).some(d => d.node === 'top' && d.message.includes('outside that block'))).toBe(true);
+  });
+
+  it('allows a THEN value deeper into a nested IF inside that same branch', () => {
+    const p = project({
+      nodes: [IF1, IF2, lit('t', { parent: 'if1', branch: 'then' }), call('deep', { parent: 'if2', branch: 'then' })],
+      edges: [edge('t', 'deep')],
+    });
+    expect(validateProject(p).filter(d => d.node === 'deep' && d.message.match(/branch|outside/))).toEqual([]);
+  });
+
+  it('a nested branch-local value cannot escape to an ancestor branch', () => {
+    const p = project({
+      nodes: [IF1, IF2, lit('d', { parent: 'if2', branch: 'then' }), call('outer', { parent: 'if1', branch: 'then' })],
+      edges: [edge('d', 'outer')],
+    });
+    expect(validateProject(p).some(d => d.node === 'outer' && d.message.includes('outside that block'))).toBe(true);
+  });
+
+  it('a THEN value cannot feed a sibling nested inside the ELSE', () => {
+    const elseNested: GraphNode = { id: 'if3', kind: 'if', parent: 'if1', branch: 'else' };
+    const p = project({
+      nodes: [IF1, elseNested, lit('t', { parent: 'if1', branch: 'then' }), call('inElse', { parent: 'if3', branch: 'then' })],
+      edges: [edge('t', 'inElse')],
+    });
+    expect(validateProject(p).some(d => d.node === 'inElse' && d.message.includes('different IF branch'))).toBe(true);
+  });
+
+  it('flags ELSE membership on a block without ELSE, and branch without a block', () => {
+    const orphanBranch = project({ nodes: [{ id: 'ctx1', kind: 'context', name: 'SELF', branch: 'else' as const }] });
+    expect(validateProject(orphanBranch).some(d => d.message.includes('without belonging'))).toBe(true);
+    const badElse = project({
+      nodes: [{ id: 'if1', kind: 'if' }, { id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1', branch: 'else' as const }, call('c1', { parent: 'if1', branch: 'else' })],
+    });
+    expect(validateProject(badElse).some(d => d.message.includes('has no ELSE'))).toBe(true);
+  });
+
+  it('scope decisions are independent of node array order', () => {
+    const nodes = [IF1, lit('t', { parent: 'if1', branch: 'then' }), call('e', { parent: 'if1', branch: 'else' })];
+    const forward = project({ nodes, edges: [edge('t', 'e')] });
+    const reverse = project({ nodes: [...nodes].reverse(), edges: [edge('t', 'e')] });
+    expect(validateProject(reverse).filter(d => d.node === 'e' && d.message.includes('branch')))
+      .toEqual(validateProject(forward).filter(d => d.node === 'e' && d.message.includes('branch')));
+  });
+});

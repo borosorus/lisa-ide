@@ -86,9 +86,12 @@ export function evaluateSource(source: string): ProgramBuilder {
               return error(node, 'A boolean is not a numeric value');
             }
             if (method === 'if') {
-              const callback = node.arguments[1] as AstNode | undefined;
-              if (args.length !== 2 || !callback || callback.type !== 'ArrowFunctionExpression')
-                return error(node, 'p.if requires a zero-argument arrow callback');
+              if (node.arguments.length < 2 || node.arguments.length > 3)
+                return error(node, 'p.if takes a condition and one or two callbacks');
+              for (const callback of node.arguments.slice(1) as AstNode[]) {
+                if (callback.type !== 'ArrowFunctionExpression')
+                  return error(node, 'p.if requires zero-argument arrow callbacks');
+              }
             }
             return (receiver as any)[method](...args);
           }
