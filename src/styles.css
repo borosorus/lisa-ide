@@ -1,6 +1,8 @@
 html, body, #root { margin: 0; min-height: 100%; }
 body { background: #0b1220; }
 .app { min-height: 100vh; display: flex; flex-direction: column; }
+/* Visual mode owns the viewport: panes scroll internally, the page never grows. */
+.app-fixed { height: 100vh; min-height: 0; overflow: hidden; }
 .topbar { padding: 20px 24px; border-bottom: 1px solid #26354c; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; flex: 1; min-height: 0; }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 580px; overflow: hidden; border: 1px solid #26354c; }
@@ -9,4 +11,79 @@ body { background: #0b1220; }
 .output-content { padding: 20px; overflow: auto; flex: 1; }
 .hash { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #bdd4f1; overflow-wrap: anywhere; margin: 4px 0 16px; }
 .code-output { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: #dceaff; background: #101827; padding: 16px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 180px; max-height: 55vh; overflow: auto; }
-@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } }
+.visual-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: minmax(0, 1fr) auto; gap: 16px; padding: 16px; flex: 1; min-height: 0; }
+.visual-workspace.library-collapsed { grid-template-columns: minmax(0, 1fr) 46px; }
+.visual-workspace .pane { min-height: 0; }
+.visual-workspace .canvas-pane { grid-row: 1; grid-column: 1; }
+.visual-workspace .side-pane { grid-row: 1; grid-column: 2; }
+.visual-workspace .output-pane { grid-row: 2; grid-column: 1 / -1; height: 40vh; }
+.visual-workspace .output-pane.output-collapsed { height: auto; }
+.visual-workspace .side-pane .pane-heading { justify-content: space-between; }
+.canvas-host { flex: 1; min-height: 0; position: relative; background: #101827; }
+.canvas-host .react-flow__controls-button { background: #172236; border-bottom: 1px solid #26354c; fill: #bdd4f1; }
+.side-content { padding: 12px 16px; overflow: auto; flex: 1; }
+.side-section { border-top: 1px solid #26354c; padding-top: 10px; margin-top: 10px; }
+.function-item { padding: 5px 10px; margin-top: 4px; cursor: grab; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border-color: #3a4c68 !important; }
+.lisa-node { position: relative; width: 240px; background: #172236; border: 1px solid #3a4c68; border-radius: 8px; padding: 8px 10px 9px; color: #dceaff; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.lisa-node-call { width: 250px; }
+.lisa-node-context, .lisa-node-literal, .lisa-node-binary { min-width: 160px; width: auto; }
+.lisa-node-if { border-style: dashed; border-color: #f6c177; background: rgba(23, 34, 54, 0.35); width: 100%; height: 100%; min-width: 0; box-sizing: border-box; }
+.node-head { display: flex; align-items: baseline; gap: 8px; min-height: 18px; }
+.node-kind { color: #7790ad; text-transform: uppercase; font-size: 10px; flex: none; }
+.node-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node-func { font-size: 11px; color: #bdd4f1; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; min-height: 22px; }
+.node-row.left { justify-content: flex-start; }
+.node-row.right { justify-content: flex-end; }
+.node-row .react-flow__handle { position: static; margin: 0; }
+.port-label { font-size: 11px; color: #bdd4f1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.port-label.payable-value { color: #f6c177; }
+.port-label.unsupported { color: #6c7f99; }
+.node-if-label { color: #f6c177; font-size: 11px; }
+.node-select, .node-input { background: #101827; color: #dceaff; border: 1px solid #3a4c68; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 4px; max-width: 120px; }
+.node-input { width: 90px; }
+.node-input.invalid { border-color: #ef8f8f; }
+.node-select:focus, .node-input:focus { outline: 1px solid #8ebdff; }
+.react-flow .port { width: 11px; height: 11px; border: 1px solid #0b1220; border-radius: 50%; }
+.react-flow .port-value { background: #8ebdff; }
+.react-flow .port-address { background: #9fd89f; }
+.react-flow .port-bool { background: #ef8f8f; }
+.react-flow .port-condition { background: #f6c177; }
+.react-flow .port-blocked { background: #3a4c68; border-style: dashed; }
+@media (max-width: 850px) { .workspace { grid-template-columns: 1fr; } .pane { min-height: 420px; } .editor { min-height: 340px; } .app-fixed { height: auto; min-height: 100vh; overflow: visible; } .visual-workspace { grid-template-columns: 1fr; grid-template-rows: auto; } .visual-workspace.library-collapsed { grid-template-columns: 1fr; } .visual-workspace .canvas-pane, .visual-workspace .side-pane, .visual-workspace .output-pane { grid-column: 1; grid-row: auto; } .visual-workspace .canvas-pane { height: 60vh; } .visual-workspace .side-pane { max-height: 50vh; } .visual-workspace .output-pane { height: 45vh; } .visual-workspace .output-pane.output-collapsed { height: auto; } }
+
+/* Interaction states: selected, invalid, and both at once stay distinct. */
+.lisa-node.node-selected { border-color: #8ebdff; box-shadow: 0 0 0 2px rgba(142, 189, 255, 0.35); }
+.lisa-node.node-invalid { border-color: #ef8f8f; box-shadow: 0 0 0 1px rgba(239, 143, 143, 0.4); }
+.lisa-node.node-invalid.node-selected { box-shadow: 0 0 0 2px rgba(142, 189, 255, 0.5), 0 0 0 4px rgba(239, 143, 143, 0.5); }
+.lisa-node-if.node-selected { border-style: dashed; }
+.row-invalid .port-label { color: #ef8f8f; }
+.react-flow .port.port-invalid { background: #ef8f8f; border-color: #ffdcdc; box-shadow: 0 0 5px rgba(239, 143, 143, 0.9); }
+.node-error-text { margin-top: 6px; color: #ffb4b4; font-size: 11px; line-height: 1.35; }
+
+/* IF resize grip: quiet until hovered or the frame is selected. */
+.if-resize { position: absolute; right: -5px; bottom: -5px; width: 13px; height: 13px; border-radius: 3px; background: #f6c177; border: 1px solid #0b1220; opacity: 0; transition: opacity .12s; cursor: nwse-resize; }
+.lisa-node-if:hover .if-resize, .lisa-node-if.node-selected .if-resize, .if-resize:hover { opacity: 0.95; }
+
+/* IF branch regions: projection-only overlays, never interactive surfaces. */
+.lisa-node-if { position: relative; }
+.if-regions { position: absolute; inset: 0; pointer-events: none; }
+.if-region {
+  position: absolute; border: 1px dashed rgba(142, 189, 255, 0.16); border-radius: 8px;
+  background: rgba(142, 189, 255, 0.03);
+}
+.if-region-else { background: rgba(255, 180, 120, 0.04); border-color: rgba(255, 180, 120, 0.18); }
+.if-chip-anchor { position: absolute; }
+.if-branch-chip {
+  pointer-events: auto; border: 1px solid rgba(142, 189, 255, 0.35); background: rgba(11, 18, 32, 0.85);
+  color: #9db8e8; font: 600 10px/1.4 inherit; letter-spacing: 0.08em; padding: 1px 7px; border-radius: 7px;
+  cursor: pointer;
+}
+.if-branch-chip:hover { border-color: #8ebdff; color: #d8e7ff; }
+.if-branch-chip.branch-selected { border-color: #8ebdff; background: rgba(142, 189, 255, 0.18); color: #eaf2ff; }
+.if-enable-else {
+  pointer-events: auto; position: absolute; right: 22px; bottom: 10px;
+  border: 1px solid rgba(255, 180, 120, 0.45); background: rgba(11, 18, 32, 0.85);
+  color: #ffcda3; font: 600 11px/1.4 inherit; padding: 2px 9px; border-radius: 8px; cursor: pointer;
+}
+.if-enable-else:hover { border-color: #ffb478; background: rgba(255, 180, 120, 0.14); color: #ffe4cd; }

@@ -4,6 +4,37 @@ A small browser IDE for writing, compiling, and inspecting LISA programs. It use
 [`@bosorus/lisa-evm`](https://www.npmjs.com/package/@bosorus/lisa-evm) package at version `0.1.0`.
 The application is static and needs no backend or wallet.
 
+Two authoring modes share one compile pipeline:
+
+- **Code** — write a LISA program directly in the editor.
+- **Visual** — compose a program from contract calls, values, comparisons, and IF blocks on a canvas.
+
+```text
+Code source ────────────────┐
+                            ├─> lisa-tooling -> bytecode -> artifact
+Visual graph -> lowering ───┘
+```
+
+## Visual mode
+
+Add **contracts** once (name + address + pasted ABI JSON); their functions appear in the sidebar and
+can be dragged onto the canvas. Fill value inputs from **context** nodes (`SELF`, `CALLER`, `GAS`,
+`TIMESTAMP`, `SELFBALANCE`), **literals**, **operations** (`add`/`sub`/`mul`/`div`/`lt`/`gt`/`eq`), and
+**decode** nodes that read a call's return data (`uint256()`, `bool()`, `bytes32()`, `word(offset)`).
+An **IF** node gates its body calls on a condition. Changing a contract address updates every node
+referencing it.
+
+The graph is canonical; the canvas is a projection of it. Before compiling, the graph is validated at
+graph level (cycles, missing inputs, invalid port types, IF-scope escapes) with node-addressed
+messages that never reach the Worker. Valid graphs lower to readable, read-only **generated source**
+(shown in the Output panel), and that source feeds the same Worker compile path code mode uses — so a
+graph always compiles to exactly the bytes its generated source describes. Node positions never
+affect program semantics; execution order follows data dependencies first and creation order second.
+
+Projects (mode, code draft, contracts, graph, positions) persist in `localStorage` under
+`lisa-ide.project.v1`, migrating an existing `lisa-ide.source.v1` draft on first load. Malformed
+saved state falls back to a fresh project.
+
 ## Development
 
 Requires Node.js 22 or newer.
