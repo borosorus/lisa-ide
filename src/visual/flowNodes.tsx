@@ -177,10 +177,10 @@ function IfBranchRegions({ frame, hasElse, selectedBranch, edit }: {
   );
   return <div className="if-regions">
     <div className="if-region" style={rel(frame.thenBody)} />
-    <span className="if-chip-anchor" style={{ left: rel(frame.thenBody).left + 8, top: rel(frame.thenBody).top + 6 }}>{chip('then', frame.thenBody)}</span>
+    <span className="if-chip-anchor" style={{ left: rel(frame.thenHeader).left + 8, top: rel(frame.thenHeader).top + 4 }}>{chip('then', frame.thenHeader)}</span>
     {hasElse && frame.elseBody && <>
       <div className="if-region if-region-else" style={rel(frame.elseBody)} />
-      <span className="if-chip-anchor" style={{ left: rel(frame.elseBody).left + 8, top: rel(frame.elseBody).top + 6 }}>{chip('else', frame.elseBody)}</span>
+      <span className="if-chip-anchor" style={{ left: rel(frame.elseHeader ?? frame.elseBody).left + 8, top: rel(frame.elseHeader ?? frame.elseBody).top + 4 }}>{chip('else', frame.elseHeader ?? frame.elseBody)}</span>
     </>}
     {!hasElse && (
       <button type="button" className="if-enable-else nodrag" title="Add an ELSE branch to this IF"

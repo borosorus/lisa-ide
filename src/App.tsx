@@ -18,7 +18,7 @@ import {
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type ScopeTarget, type Vec2, type VisualProject } from './visual/model';
 import { NodeInspector, VisualPalette } from './visual/NodePanel';
 import { nodeSize, spawnPosition } from './visual/spawnPosition';
-import { containmentTarget, iframes, occupiedRects, spawnInsideIf } from './visual/containment';
+import { occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containment';
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import './styles.css';
@@ -106,19 +106,19 @@ export default function App() {
     const id = createId(project.nodes.map(n => n.id), 'call');
     setFocusNodeId(id);
     editVisual(p => {
-      // A drop inside an IF body creates the call IN that branch: the drop
-      // point picks the semantic scope first, then placement near the point
-      // (collision-shifted). A top-level drop stays top-level.
+      // The same normalization rule as existing-node drags (resolveNodeDrop):
+      // the card's rect at the drop point picks the branch (header/divider/
+      // outside stay top-level), then the full rect is placed inside the
+      // branch body — a free slot if one exists, else the clamped point.
       const call: GraphNode = { id, kind: 'call', contractId, signature };
-      const target = containmentTarget({
-        movedRect: { x: anchor.x, y: anchor.y, width: 0, height: 0 },
-        frames: [...iframes(p).values()],
-      });
-      if (target) {
-        const placed = spawnInsideIf({ project: p, frameId: target.parent, branch: target.branch, size: nodeSize(call, p), anchor });
-        if (placed) return addNode(p, { ...call, parent: target.parent, branch: target.branch } as GraphNode, placed.position);
+      const size = nodeSize(call, p);
+      const resolved = resolveNodeDrop({ project: p, node: call, desiredPosition: anchor });
+      if (resolved.scope !== null) {
+        const placed = spawnInsideIf({ project: p, frameId: resolved.scope.parent, branch: resolved.scope.branch, size, anchor });
+        const node = { ...call, ...resolved.scope } as GraphNode;
+        return addNode(p, node, placed ? placed.position : resolved.position);
       }
-      return addNode(p, call, spawnNear(p, anchor, call));
+      return addNode(p, call, spawnNear(p, { x: anchor.x + size.width / 2, y: anchor.y + size.height / 2 }, call));
     });
   }
 

@@ -6,34 +6,54 @@ import { nodeSize, spawnPositionInBounds, type Rect, type Size } from './spawnPo
 
 /**
  * Presentation-only geometry for IF containers. The semantic `parent` +
- * `branch` fields are the single source of truth; these helpers merely
- * derive the frames the canvas draws and hit-tests drags against, and
- * persist their growth. The branch regions below are projections of that
- * state — nothing here may feed lowering or generation.
+ * `branch` fields are the single source of truth; this module derives the
+ * frame zones the canvas draws, normalizes positions into them, and grows
+ * frames. Nothing here may feed lowering, generation, or validateProject().
+ *
+ * A frame is split into explicit zones:
+ *
+ *   ┌ header (IF condition UI — never content) ┐
+ *   ├ THEN strip ──────┬ ELSE strip ───────────┤  (labels only)
+ *   │  thenBody        │  elseBody             │  (the only content space)
+ *   └──────────────────┴───────────────────────┘
+ *
+ * The bodies are already inset to their safe bounds (padding from the outer
+ * border, the strips, the divider, and the bottom edge). The spatial
+ * invariant: every scoped node's full rect sits inside exactly one body;
+ * every unscoped node is fully outside every frame.
  */
 
 export interface Frame {
   readonly id: string;
   /** Full container rect (anchored at the IF's stored position). */
   readonly rect: Rect;
-  /** Frame minus its header strip — the combined work area of both branches. */
-  readonly body: Rect;
-  /** THEN drop region: the whole body without ELSE, the left half with it. */
+  /** IF condition row; never a valid containment target. */
+  readonly header: Rect;
+  /** THEN label strip; labels only, never content space. */
+  readonly thenHeader: Rect;
+  /** THEN safe content bounds. */
   readonly thenBody: Rect;
-  /** ELSE drop region (right half); only when the block has ELSE enabled. */
+  /** ELSE label strip; only when the block has ELSE. */
+  readonly elseHeader?: Rect;
+  /** ELSE safe content bounds. */
   readonly elseBody?: Rect;
   /** Nesting level; 0 for IFs at top level. Independent of node order. */
   readonly depth: number;
 }
 
-export const IF_HEADER = 44;
+/** Rendered IF head: card padding + kind row + condition port row (~55px). */
+export const IF_HEADER = 64;
+/** THEN/ELSE label strip height (chip + breathing room). */
+export const BRANCH_HEADER = 28;
+/** Safe-content inset from every zone border. */
 export const IF_PADDING = 16;
-
-/** Comfortable minimum work width per branch once ELSE splits the body. */
+/** Comfortable minimum width per branch once ELSE splits the body. */
 export const ELSE_MIN_BRANCH_WIDTH = 320;
+/** Gap left between a pushed-out unscoped node and the frame it clears. */
+export const OUTSIDE_GAP = 24;
 
 /** Nesting depth of any node: hops up its semantic parent chain. Cycle-safe
- *  and independent of node array order — no memo assumptions. */
+ *  and independent of node array order. */
 export function scopeDepth(project: VisualProject, nodeId: string): number {
   const parentOf = new Map(project.nodes.map(n => [n.id, n.parent] as const));
   let depth = 0;
@@ -47,13 +67,48 @@ export function scopeDepth(project: VisualProject, nodeId: string): number {
   return depth;
 }
 
+/** Zones of a frame rect: header, branch strips, padded safe bodies. The
+ *  divider is always the frame's horizontal midpoint (§9: derived from
+ *  frame width, never from where children happen to sit). */
+export function frameZones(rect: Rect, hasElse: boolean): Omit<Frame, 'id' | 'depth'> {
+  const top = rect.y + IF_HEADER;
+  const height = Math.max(rect.height - IF_HEADER - BRANCH_HEADER - IF_PADDING, 1);
+  if (!hasElse) {
+    return {
+      rect,
+      header: { x: rect.x, y: rect.y, width: rect.width, height: IF_HEADER },
+      thenHeader: { x: rect.x, y: top, width: rect.width, height: BRANCH_HEADER },
+      thenBody: {
+        x: rect.x + IF_PADDING, y: top + BRANCH_HEADER,
+        width: Math.max(rect.width - IF_PADDING * 2, 1), height,
+      },
+    };
+  }
+  const half = rect.width / 2;
+  return {
+    rect,
+    header: { x: rect.x, y: rect.y, width: rect.width, height: IF_HEADER },
+    thenHeader: { x: rect.x, y: top, width: half, height: BRANCH_HEADER },
+    elseHeader: { x: rect.x + half, y: top, width: rect.width - half, height: BRANCH_HEADER },
+    thenBody: {
+      x: rect.x + IF_PADDING, y: top + BRANCH_HEADER,
+      width: Math.max(half - IF_PADDING * 2, 1), height,
+    },
+    elseBody: {
+      x: rect.x + half + IF_PADDING, y: top + BRANCH_HEADER,
+      width: Math.max(rect.width - half - IF_PADDING * 2, 1), height,
+    },
+  };
+}
+
 /**
  * Frames of all IF nodes. Each starts at its stored size (clamped, default
- * when absent) and grows to wrap its direct children — including the
- * effective rect of nested IFs — computed inside-out. Frames never shrink
- * below their stored size; only user resize lowers a stored size. With
- * ELSE enabled the body splits into equal halves and the width additionally
- * grows so each branch's own children fit inside their half.
+ * when absent) and grows to wrap its children — including the effective
+ * rect of nested IFs — computed inside-out. Growth never shrinks a stored
+ * size and, with ELSE, keeps the equal split predictable: the THEN half is
+ * at least its widest reach, every half can hold its largest child, and
+ * both halves keep the branch minimum. Ordinary child movement inside the
+ * current frame therefore cannot move the divider.
  */
 export function iframes(project: VisualProject): Map<string, Frame> {
   const frames = new Map<string, Frame>();
@@ -67,41 +122,46 @@ export function iframes(project: VisualProject): Map<string, Frame> {
   for (const node of ordered) {
     const anchor = anchorOf(node.id);
     const stored = clampFrameSize(project.frameSizes?.[node.id] ?? IF_DEFAULT_SIZE);
+    const hasElse = node.hasElse === true;
     let right = anchor.x + stored.width;
     let bottom = anchor.y + stored.height;
     let thenRight = anchor.x;
+    let elseRight = anchor.x;
+    let maxChildWidth = 0;
+    let maxChildHeight = 0;
     for (const child of project.nodes) {
       if (child.parent !== node.id) continue;
       const position = anchorOf(child.id);
       const size: Size = child.kind === 'if'
         ? effective.get(child.id) ?? storedSizeOf(project, child)
         : nodeSize(child, project);
+      maxChildWidth = Math.max(maxChildWidth, size.width);
+      maxChildHeight = Math.max(maxChildHeight, size.height);
       right = Math.max(right, position.x + size.width + IF_PADDING);
       bottom = Math.max(bottom, position.y + size.height + IF_PADDING);
-      // Only THEN content sizes the divider; the ELSE half's own children
-      // stretch the frame's right edge without moving the divider, so an
-      // ELSE child can never end up rendered left of its own region.
-      if (child.branch !== 'else') thenRight = Math.max(thenRight, position.x + size.width + IF_PADDING);
+      if (hasElse && child.branch === 'else') elseRight = Math.max(elseRight, position.x + size.width + IF_PADDING);
+      else thenRight = Math.max(thenRight, position.x + size.width + IF_PADDING);
     }
-    let divider = anchor.x;
-    if (node.hasElse === true) {
-      divider = Math.max(thenRight, anchor.x + ELSE_MIN_BRANCH_WIDTH);
-      right = Math.max(right, divider + ELSE_MIN_BRANCH_WIDTH);
+    let width = Math.max(right - anchor.x, IF_MIN_SIZE.width);
+    if (hasElse) {
+      width = Math.max(
+        width,
+        2 * ELSE_MIN_BRANCH_WIDTH,
+        2 * (thenRight - anchor.x),
+        elseRight - anchor.x,
+        2 * (maxChildWidth + IF_PADDING * 2),
+      );
     }
-    const size: IfFrameSize = {
-      width: Math.max(right - anchor.x, IF_MIN_SIZE.width),
-      height: Math.max(bottom - anchor.y, IF_MIN_SIZE.height),
-    };
+    const height = Math.max(
+      bottom - anchor.y,
+      IF_MIN_SIZE.height,
+      IF_HEADER + BRANCH_HEADER + IF_PADDING * 2 + maxChildHeight,
+    );
+    const size: IfFrameSize = { width, height };
     effective.set(node.id, size);
-    const rect: Rect = { x: anchor.x, y: anchor.y, width: size.width, height: size.height };
-    const body: Rect = { x: rect.x, y: rect.y + IF_HEADER, width: rect.width, height: Math.max(rect.height - IF_HEADER, 1) };
-    const hasElse = node.hasElse === true;
     frames.set(node.id, {
       id: node.id,
-      rect,
-      body,
-      thenBody: hasElse ? { x: body.x, y: body.y, width: divider - body.x, height: body.height } : body,
-      ...(hasElse ? { elseBody: { x: divider, y: body.y, width: body.x + body.width - divider, height: body.height } } : {}),
+      ...frameZones({ x: anchor.x, y: anchor.y, width: size.width, height: size.height }, hasElse),
       depth: depths.get(node.id) ?? 0,
     });
   }
@@ -114,58 +174,92 @@ function storedSizeOf(project: VisualProject, ifNode: GraphNode): IfFrameSize {
     : IF_DEFAULT_SIZE;
 }
 
+/** Rendered size of any node: IFs at their effective frame, rest per card. */
+export function effectiveSize(project: VisualProject, node: GraphNode, frames = iframes(project)): Size {
+  if (node.kind !== 'if') return nodeSize(node, project);
+  const frame = frames.get(node.id);
+  return frame ? { width: frame.rect.width, height: frame.rect.height } : nodeSize(node, project);
+}
+
 /**
- * Persist current effective frame sizes into `frameSizes` wherever they grew,
- * so a frame never shrinks when a child moves away or is deleted. Run after
- * moves, reparenting, and adds; only explicit resize may shrink. THEN growth
- * pushes the divider right; ELSE children it would swallow are slid right by
- * the same amount (with their subtrees) so rendered position and semantic
- * branch never disagree. Purely positional — semantics untouched.
+ * The one normalizer every project transition ends with: persist frame
+ * growth, then clamp every scoped node fully inside its branch body's safe
+ * bounds (sliding semantic descendants with it). Deterministic and
+ * idempotent; purely positional — semantics untouched. Growth can only
+ * move the equal-split divider outward, and this pass then pulls (never
+ * merely slides) any ELSE child that ended up left of it back into its
+ * body, so a child can never render in the wrong branch.
  */
 export function expandIfFrames(project: VisualProject): VisualProject {
-  let changed = false;
-  const frameSizes = { ...project.frameSizes };
-  for (const [id, frame] of iframes(project)) {
-    const current = frameSizes[id] ?? IF_DEFAULT_SIZE;
-    if (frame.rect.width > current.width || frame.rect.height > current.height) {
-      frameSizes[id] = {
-        width: Math.max(frame.rect.width, current.width),
-        height: Math.max(frame.rect.height, current.height),
-      };
-      changed = true;
-    }
-  }
-  let next = changed ? { ...project, frameSizes } : project;
-  for (let pass = 0; pass < 6; pass++) {
+  let next = project;
+  // Converge to a fixed point: growth, scoped clamping, and unscoped
+  // push-out can each wake another pass (deep nesting especially). The cap
+  // only guards against pathological cycles, not normal nesting depth.
+  for (let pass = 0; pass < 64; pass++) {
     const frames = iframes(next);
+    const frameSizes = { ...next.frameSizes };
+    let grew = false;
+    for (const [id, frame] of frames) {
+      const current = frameSizes[id] ?? IF_DEFAULT_SIZE;
+      if (frame.rect.width > current.width || frame.rect.height > current.height) {
+        frameSizes[id] = {
+          width: Math.max(frame.rect.width, current.width),
+          height: Math.max(frame.rect.height, current.height),
+        };
+        grew = true;
+      }
+    }
+    if (grew) next = { ...next, frameSizes };
     const positions = { ...next.positions };
     let moved = false;
-    for (const node of next.nodes) {
-      const parent = node.parent === undefined ? undefined : next.nodes.find(n => n.id === node.parent);
-      if (node.branch !== 'else' || parent?.kind !== 'if' || parent.hasElse !== true) continue;
-      const divider = frames.get(parent.id)?.elseBody?.x;
-      if (divider === undefined) continue;
-      const at = positions[node.id] ?? { x: 0, y: 0 };
-      if (at.x >= divider) continue;
-      const dx = divider + IF_PADDING / 2 - at.x;
-      positions[node.id] = { x: at.x + dx, y: at.y };
-      for (const childId of descendants(next, node.id)) {
-        const childAt = positions[childId] ?? { x: 0, y: 0 };
-        positions[childId] = { x: childAt.x + dx, y: childAt.y };
+    const shift = (id: string, delta: Vec2) => {
+      for (const childId of [id, ...descendants(next, id)]) {
+        const at = positions[childId] ?? { x: 0, y: 0 };
+        positions[childId] = { x: at.x + delta.x, y: at.y + delta.y };
       }
+    };
+    for (const node of next.nodes) {
+      const at = positions[node.id] ?? { x: 0, y: 0 };
+      const size = effectiveSize(next, node, frames);
+      if (node.parent === undefined) {
+        // The invariant also covers unscoped nodes: never overlapping a
+        // frame. Frame growth must not be able to swallow one.
+        const obstacles = [...frames.values()]
+          .filter(f => f.id !== node.id && !descendants(next, node.id).includes(f.id))
+          .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        const pushed = pushOutOfFrames(at, size, obstacles);
+        if (pushed.x === at.x && pushed.y === at.y) continue;
+        shift(node.id, { x: pushed.x - at.x, y: pushed.y - at.y });
+        moved = true;
+        continue;
+      }
+      const frame = frames.get(node.parent);
+      const parent = next.nodes.find(n => n.id === node.parent);
+      if (!frame || parent?.kind !== 'if') continue;
+      const body = node.branch === 'else' && parent.hasElse === true ? frame.elseBody ?? frame.thenBody : frame.thenBody;
+      const clamped = clampInto(at, size, body);
+      if (clamped.x === at.x && clamped.y === at.y) continue;
+      shift(node.id, { x: clamped.x - at.x, y: clamped.y - at.y });
       moved = true;
     }
     next = { ...next, positions };
-    if (!moved) return next;
+    if (!moved && !grew) return next;
   }
   return next;
 }
 
+function clampInto(at: Vec2, size: Size, body: Rect): Vec2 {
+  return {
+    x: size.width >= body.width ? body.x : Math.min(Math.max(at.x, body.x), body.x + body.width - size.width),
+    y: size.height >= body.height ? body.y : Math.min(Math.max(at.y, body.y), body.y + body.height - size.height),
+  };
+}
+
 /**
- * Placement for a node added into a branch body (padding included), growing
- * the frame right/down in fixed steps when nothing fits. Occupancy excludes
- * the target frame and its ancestors — their rects merely contain the
- * search area. Growth with ELSE keeps both halves equal.
+ * Placement for a node added into a branch body (click-to-add): a free slot
+ * fully inside the branch's safe bounds, growing the frame right/down in
+ * fixed steps when nothing fits. Occupancy excludes the target frame and
+ * its ancestors — their rects merely contain the search area.
  */
 export function spawnInsideIf(params: {
   project: VisualProject;
@@ -187,34 +281,19 @@ export function spawnInsideIf(params: {
   const frame = iframes(project).get(frameId);
   if (!frame) return null;
   const anchor = project.positions[frameId] ?? { x: 0, y: 0 };
+  const hasElse = node.hasElse === true;
   const skip = containerSkipSet(project, frameId);
   const occupied = occupiedRects(project).filter(rect => !skip.has(rect.id));
-  const hasElse = node.hasElse === true;
   let width = frame.rect.width;
   let height = frame.rect.height;
-  // The divider only moves for THEN content: a THEN slot that does not fit
-  // left of it widens the THEN half (ELSE children are slid right on commit
-  // by expandIfFrames); an ELSE slot only ever needs the right half.
-  let divider = frame.elseBody?.x ?? anchor.x + width;
-  if (hasElse && branch === 'then') {
-    divider = Math.max(divider, anchor.x + size.width + IF_PADDING * 2 + 8);
-    width = Math.max(width, divider - anchor.x + ELSE_MIN_BRANCH_WIDTH + IF_PADDING);
-  }
   const boundsFor = (): Rect => {
-    const height2 = Math.max(height - IF_HEADER - IF_PADDING * 1.5, 1);
-    if (!hasElse) {
-      return {
-        x: anchor.x + IF_PADDING, y: anchor.y + IF_HEADER + IF_PADDING / 2,
-        width: Math.max(width - IF_PADDING * 2, 1), height: height2,
-      };
-    }
-    return branch === 'else'
-      ? { x: divider + IF_PADDING / 2, y: anchor.y + IF_HEADER + IF_PADDING / 2, width: Math.max(anchor.x + width - divider - IF_PADDING * 1.5, 1), height: height2 }
-      : { x: anchor.x + IF_PADDING, y: anchor.y + IF_HEADER + IF_PADDING / 2, width: Math.max(divider - anchor.x - IF_PADDING * 2, 1), height: height2 };
+    const zones = frameZones({ x: anchor.x, y: anchor.y, width, height }, hasElse);
+    return branch === 'else' ? zones.elseBody ?? zones.thenBody : zones.thenBody;
   };
   // Guarantee one slot geometrically fits before searching for emptiness,
   // so a selected IF never silently loses the node to a viewport fallback.
-  height = Math.max(height, size.height + IF_HEADER + IF_PADDING * 2 + 8);
+  height = Math.max(height, size.height + IF_HEADER + BRANCH_HEADER + IF_PADDING * 2);
+  if (hasElse) width = Math.max(width, 2 * (size.width + IF_PADDING * 2));
   if (params.anchor) {
     const dropped = spawnPositionInBounds({ anchor: params.anchor, size, occupied, bounds: boundsFor() });
     if (dropped) return { position: dropped, frameSize: { width, height } };
@@ -225,7 +304,7 @@ export function spawnInsideIf(params: {
     const anchorPoint = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
     const position = spawnPositionInBounds({ anchor: anchorPoint, size, occupied, bounds });
     if (position) return { position, frameSize: { width, height } };
-    width += hasElse && branch === 'else' ? size.width + 40 : (size.width + 40) * (hasElse ? 2 : 1);
+    width += hasElse ? 2 * (size.width + 40) : size.width + 40;
     height += size.height + 40;
   }
   return null;
@@ -265,31 +344,140 @@ export function absolutePosition(project: VisualProject, id: string): Vec2 {
 }
 
 /**
- * Which IF branch a dragged node landed in, judged by its center. The
- * deepest containing branch region wins; ties break on frame id, then
- * branch. Returns undefined when the node belongs nowhere (outside every
- * region) — callers keep nothing from frames that would capture the node's
- * own subtree.
+ * Intent only: which branch a dragged node's CENTER points at. The IF
+ * header and the branch label strips are not content space — a center
+ * there means "outside", as does a center anywhere else off the bodies.
+ * The deepest frame wins; ties break on frame id (then THEN), keeping the
+ * verdict deterministic. This never places a node — resolveNodeDrop does.
  */
 export function containmentTarget(params: {
   movedRect: Rect;
   frames: Iterable<Frame>;
 }): ScopeTarget | undefined {
   const center = { x: params.movedRect.x + params.movedRect.width / 2, y: params.movedRect.y + params.movedRect.height / 2 };
-  const inRect = (r: Rect) => center.x >= r.x && center.x <= r.x + r.width
-    && center.y >= r.y && center.y <= r.y + r.height;
   let best: { frame: Frame; branch: IfBranch } | undefined;
   for (const frame of params.frames) {
-    const branch: IfBranch | undefined = inRect(frame.elseBody ?? frame.thenBody) ? (frame.elseBody ? 'else' : 'then')
-      : inRect(frame.thenBody) ? 'then' : undefined;
-    if (branch === undefined) continue;
+    const bodyTop = frame.rect.y + IF_HEADER + BRANCH_HEADER;
+    if (center.x < frame.rect.x || center.x > frame.rect.x + frame.rect.width) continue;
+    if (center.y < bodyTop || center.y > frame.rect.y + frame.rect.height) continue;
+    const divider = frame.elseHeader ? frame.rect.x + frame.rect.width / 2 : Number.POSITIVE_INFINITY;
+    const branch: IfBranch = center.x < divider ? 'then' : frame.elseHeader ? 'else' : 'then';
     if (!best || frame.depth > best.frame.depth
         || (frame.depth === best.frame.depth
-            && (frame.id < best.frame.id || (frame.id === best.frame.id && branch === 'then')))) {
+            && (frame.id === best.frame.id ? branch === 'then' : frame.id < best.frame.id))) {
       best = { frame, branch };
     }
   }
   return best && { parent: best.frame.id, branch: best.branch };
+}
+
+/**
+ * The single drop-normalization rule, used for existing-node drags and
+ * contract-function drops alike. The dragged center only chooses intent
+ * (THEN / ELSE / outside); the returned position always satisfies the
+ * spatial invariant for the chosen scope:
+ *
+ * - branch target: the full node rect clamped into that body's safe bounds
+ *   (only as much as necessary; frame growth for oversized nodes follows on
+ *   commit via expandIfFrames, which widens the frame before anything else);
+ * - no target: scope cleared and, if the rect still intersects any frame,
+ *   the minimum deterministic translation that clears it (+ OUTSIDE_GAP),
+ *   iterated so nested/overlapping frames cannot trap the node.
+ *
+ * Excluded frames (the dragged subtree's own) never capture the node.
+ */
+export function resolveNodeDrop(params: {
+  project: VisualProject;
+  node: GraphNode;
+  desiredPosition: Vec2;
+  excludedFrames?: ReadonlySet<string>;
+}): { position: Vec2; scope: ScopeTarget | null } {
+  const { project, node, desiredPosition } = params;
+  const frames = iframes(project);
+  const obstacles = [...frames.values()]
+    .filter(f => !params.excludedFrames?.has(f.id))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const size = effectiveSize(project, node, frames);
+  const movedRect: Rect = { x: desiredPosition.x, y: desiredPosition.y, width: size.width, height: size.height };
+  const scope = containmentTarget({ movedRect, frames: obstacles }) ?? null;
+  if (scope !== null) {
+    const frame = obstacles.find(f => f.id === scope.parent)!;
+    const body = scope.branch === 'else' ? frame.elseBody ?? frame.thenBody : frame.thenBody;
+    return { position: clampInto(desiredPosition, size, body), scope };
+  }
+  return { position: pushOutOfFrames(desiredPosition, size, obstacles), scope: null };
+}
+
+/**
+ * Minimum deterministic translation clearing every obstacle frame
+ * (iterated, so nested/overlapping frames cannot trap the node). Ties
+ * resolve in fixed order: right, left, down, up.
+ */
+function pushOutOfFrames(from: Vec2, size: Size, obstacles: readonly Frame[]): Vec2 {
+  let position = { ...from };
+  for (let pass = 0; pass < 64; pass++) {
+    const rect: Rect = { x: position.x, y: position.y, width: size.width, height: size.height };
+    const hit = obstacles.find(f => intersects(rect, f.rect));
+    if (!hit) break;
+    const candidates: readonly (readonly [number, number])[] = [
+      [hit.rect.x + hit.rect.width + OUTSIDE_GAP - position.x, 0],
+      [hit.rect.x - OUTSIDE_GAP - (position.x + size.width), 0],
+      [0, hit.rect.y + hit.rect.height + OUTSIDE_GAP - position.y],
+      [0, hit.rect.y - OUTSIDE_GAP - (position.y + size.height)],
+    ];
+    const [dx, dy] = candidates.reduce((a, b) =>
+      Math.abs(b[0]) + Math.abs(b[1]) < Math.abs(a[0]) + Math.abs(a[1]) ? b : a);
+    position = { x: position.x + dx, y: position.y + dy };
+  }
+  return position;
+}
+
+/**
+ * Normalizes a whole drag gesture (one primary plus any independently
+ * dragged group members) into final positions + changed semantic scopes.
+ * Each dragged node gets its own resolveNodeDrop verdict against every
+ * frame except the dragged subtree's own; semantic descendants ride their
+ * owner's normalized delta untouched. Order of `desired` only affects
+ * nothing: each node resolves against the pre-drag geometry independently.
+ */
+export function normalizeDrag(project: VisualProject, desired: Readonly<Record<string, Vec2>>): {
+  changes: Record<string, Vec2>;
+  scopes: Record<string, ScopeTarget | null>;
+} {
+  const changes: Record<string, Vec2> = {};
+  const scopes: Record<string, ScopeTarget | null> = {};
+  const subtree = new Set<string>();
+  for (const id of Object.keys(desired)) {
+    subtree.add(id);
+    for (const d of descendants(project, id)) subtree.add(d);
+  }
+  for (const [id, wanted] of Object.entries(desired)) {
+    const node = project.nodes.find(n => n.id === id);
+    if (!node) continue;
+    const resolved = resolveNodeDrop({ project, node, desiredPosition: wanted, excludedFrames: subtree });
+    changes[id] = resolved.position;
+    const current: ScopeTarget | null = node.parent === undefined
+      ? null
+      : { parent: node.parent, branch: node.branch ?? 'then' };
+    const changed = resolved.scope === null
+      ? current !== null
+      : current === null || current.parent !== resolved.scope.parent || current.branch !== resolved.scope.branch;
+    if (changed) scopes[id] = resolved.scope;
+    const saved = project.positions[id] ?? { x: 0, y: 0 };
+    const delta = { x: resolved.position.x - saved.x, y: resolved.position.y - saved.y };
+    for (const childId of descendants(project, id)) {
+      if (changes[childId] !== undefined) continue;
+      const before = project.positions[childId] ?? { x: 0, y: 0 };
+      changes[childId] = { x: before.x + delta.x, y: before.y + delta.y };
+    }
+  }
+  return { changes, scopes };
+}
+
+/** True when the rects overlap with positive area (touching edges is fine). */
+function intersects(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width
+    && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 
 /** Ids of semantic descendants of `id`, any depth, defensively cycle-safe. */

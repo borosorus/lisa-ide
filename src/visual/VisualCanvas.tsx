@@ -6,8 +6,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
-import { absolutePosition, containmentTarget, descendants, iframes } from './containment';
-import { nodeSize, type Rect } from './spawnPosition';
+import { absolutePosition, iframes, normalizeDrag } from './containment';
 import { indexDiagnostics, type GraphDiagnostic } from './validate';
 import type { GraphNode, IfFrameSize, ScopeTarget, Vec2, VisualProject } from './model';
 import { FUNCTION_MIME } from './ContractsPanel';
@@ -228,53 +227,20 @@ function Canvas({
    * stay positional; only a changed containment is a semantic edit.
    */
   const onNodeDragStop = useCallback((_: MouseEvent | TouchEvent, node: Node, group?: Node[]) => {
+    if (!project.nodes.some(n => n.id === node.id)) return;
     const saved = (id: string): Vec2 => project.positions[id] ?? { x: 0, y: 0 };
-    const changes: Record<string, Vec2> = {};
-    const draggedIds: string[] = [];
+    // Every independently dragged card reports its post-drag position in
+    // its own projection space (parent-relative once React Flow nests it);
+    // normalizeDrag turns all of them into invariant-abiding positions and
+    // semantic scope changes, carrying each node's children by delta.
+    const desired: Record<string, Vec2> = {};
     for (const m of [...(group ?? []), node]) {
       const base = m.parentId === undefined ? { x: 0, y: 0 } : saved(m.parentId);
-      const absolute = { x: m.position.x + base.x, y: m.position.y + base.y };
-      changes[m.id] = absolute;
-      draggedIds.push(m.id);
+      desired[m.id] = { x: m.position.x + base.x, y: m.position.y + base.y };
     }
-    for (const id of draggedIds) {
-      const delta = { x: changes[id].x - saved(id).x, y: changes[id].y - saved(id).y };
-      for (const childId of descendants(project, id)) {
-        if (changes[childId] !== undefined) continue;
-        const before = saved(childId);
-        changes[childId] = { x: before.x + delta.x, y: before.y + delta.y };
-      }
-    }
-    const dragged = project.nodes.find(n => n.id === node.id);
-    if (!dragged) return;
-    // Hit-test the dragged card against frames, translated to their own
-    // post-drag places when an IF was part of this drag.
-    const excluded = new Set<string>([node.id, ...descendants(project, node.id)]);
-    const target = containmentTarget({
-      movedRect: { ...changes[node.id], ...nodeSize(dragged, project) },
-      frames: [...frames.values()].filter(f => !excluded.has(f.id)).map(f => {
-        const after = changes[f.id];
-        if (after === undefined) return f;
-        const dx = after.x - saved(f.id).x;
-        const dy = after.y - saved(f.id).y;
-        const shift = (r: Rect): Rect => ({ ...r, x: r.x + dx, y: r.y + dy });
-        return {
-          ...f,
-          rect: shift(f.rect), body: shift(f.body), thenBody: shift(f.thenBody),
-          ...(f.elseBody ? { elseBody: shift(f.elseBody) } : {}),
-        };
-      }),
-    });
-    const scopes: Record<string, ScopeTarget | null> = {};
-    const current: ScopeTarget | null = dragged.parent === undefined
-      ? null
-      : { parent: dragged.parent, branch: dragged.branch ?? 'then' };
-    const moved = target === undefined
-      ? current !== null
-      : current === null || current.parent !== target.parent || current.branch !== target.branch;
-    if (moved) scopes[node.id] = target ?? null;
+    const { changes, scopes } = normalizeDrag(project, desired);
     onMoveNodes(changes, scopes);
-  }, [project, frames, onMoveNodes]);
+  }, [project, onMoveNodes]);
 
   return <div className="canvas-host" aria-label="Visual canvas" ref={hostRef}
     onDrop={onDrop} onDragOver={onDragOver}

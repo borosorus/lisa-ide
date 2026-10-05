@@ -130,7 +130,7 @@ describe('LisaNode interaction states', () => {
 
   it('renders a resize grip on IF frames and commits the dragged size once', () => {
     const edit = { patch: vi.fn(), resize: vi.fn() };
-    const frame = { id: 'if1', rect: { x: 0, y: 0, width: 420, height: 260 }, body: { x: 0, y: 44, width: 420, height: 216 }, thenBody: { x: 0, y: 44, width: 420, height: 216 }, depth: 0 };
+    const frame = { id: 'if1', rect: { x: 0, y: 0, width: 420, height: 260 }, header: { x: 0, y: 0, width: 420, height: 64 }, thenHeader: { x: 0, y: 64, width: 420, height: 28 }, thenBody: { x: 16, y: 92, width: 388, height: 152 }, depth: 0 };
     const { container } = renderNode({ id: 'if1', kind: 'if' }, emptyProject(), { frame }, edit);
     const grip = screen.getByLabelText('Resize IF frame');
     expect(container.contains(grip)).toBe(true);
@@ -145,7 +145,7 @@ describe('LisaNode interaction states', () => {
 
   it('restores the stored frame size when a resize is cancelled', () => {
     const edit = { patch: vi.fn(), resize: vi.fn() };
-    const frame = { id: 'if1', rect: { x: 0, y: 0, width: 420, height: 260 }, body: { x: 0, y: 44, width: 420, height: 216 }, thenBody: { x: 0, y: 44, width: 420, height: 216 }, depth: 0 };
+    const frame = { id: 'if1', rect: { x: 0, y: 0, width: 420, height: 260 }, header: { x: 0, y: 0, width: 420, height: 64 }, thenHeader: { x: 0, y: 64, width: 420, height: 28 }, thenBody: { x: 16, y: 92, width: 388, height: 152 }, depth: 0 };
     renderNode({ id: 'if1', kind: 'if' }, emptyProject(), { frame }, edit);
     const grip = screen.getByLabelText('Resize IF frame');
     fireEvent.pointerDown(grip, { clientX: 200, clientY: 200, pointerId: 1 });
@@ -156,7 +156,7 @@ describe('LisaNode interaction states', () => {
 
   it('never shrinks an IF below the minimum while dragging in', () => {
     const edit = { patch: vi.fn(), resize: vi.fn() };
-    const frame = { id: 'if1', rect: { x: 0, y: 0, width: 260, height: 150 }, body: { x: 0, y: 44, width: 260, height: 106 }, thenBody: { x: 0, y: 44, width: 260, height: 106 }, depth: 0 };
+    const frame = { id: 'if1', rect: { x: 0, y: 0, width: 260, height: 150 }, header: { x: 0, y: 0, width: 260, height: 64 }, thenHeader: { x: 0, y: 64, width: 260, height: 28 }, thenBody: { x: 16, y: 92, width: 228, height: 42 }, depth: 0 };
     renderNode({ id: 'if1', kind: 'if' }, emptyProject(), { frame }, edit);
     const grip = screen.getByLabelText('Resize IF frame');
     fireEvent.pointerDown(grip, { clientX: 100, clientY: 100, pointerId: 1 });
