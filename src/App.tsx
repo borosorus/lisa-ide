@@ -21,6 +21,7 @@ import { nodeSize, spawnPosition } from './visual/spawnPosition';
 import { occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containment';
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
+import { WalletExecutionPanel } from './wallet/WalletExecutionPanel';
 import './styles.css';
 
 const theme = createTheme({
@@ -313,6 +314,7 @@ export default function App() {
           </Button>
         </Stack>
       </Stack>
+      <WalletExecutionPanel output={output} />
       {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
