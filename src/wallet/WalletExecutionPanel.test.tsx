@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { JsonRpcSigner } from 'ethers';
 import { encodeExecuteLisa } from '../lisa-account/execute';
@@ -40,6 +41,8 @@ interface Options {
   signerAccount?: string;
   chainId?: string;
   signerChainId?: string;
+  /** What the wallet itself reports as connected, independent of the signer. */
+  walletAccounts?: string[];
   output?: CompileOutput | null;
   config?: DeploymentConfig;
   send?: () => Promise<{ hash: string; wait: () => Promise<{ status: number; blockNumber: number } | null> }>;
@@ -60,6 +63,7 @@ function fake(options: Options = {}): Fake {
     reader,
     account: options.account ?? ACCOUNT,
     chainId: options.chainId ?? '1',
+    walletAccounts: vi.fn(async () => options.walletAccounts ?? [options.account ?? ACCOUNT]),
     signer: {
       getAddress: vi.fn(async () => options.signerAccount ?? options.account ?? ACCOUNT),
       sendTransaction,
@@ -277,6 +281,98 @@ describe('WalletExecutionPanel', () => {
     fireEvent.click(execute());
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
     await screen.findByText('Confirmed');
+    // The replacement program is what goes out, not the one first reviewed (§6).
     expect(f.sendTransaction).toHaveBeenCalledWith(expect.objectContaining({ data: encodeExecuteLisa('0x6002') }));
+  });
+
+  it('aborts when the wallet reports a different account than the reviewed one', async () => {
+    // The signer still names ACCOUNT; only the wallet knows it moved. A cached
+    // signer address is not evidence of what is connected now (§14).
+    const f = fake({ walletAccounts: [OTHER_ACCOUNT] });
+    render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    expect(await screen.findByText(/connected account changed before sending/i)).toBeInTheDocument();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('aborts when the wallet reports no connected account at all', async () => {
+    const f = fake({ walletAccounts: [] });
+    render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    expect(await screen.findByText(/reports no connected account/i)).toBeInTheDocument();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('aborts when the compiled program is replaced during the pre-send check', async () => {
+    let release!: (value: string) => void;
+    const pending = new Promise<string>(resolve => { release = resolve });
+    let first = true;
+    const f = fake({ code: async () => { if (first) { first = false; return delegatedTo(IMPL) } return pending } });
+    const { rerender } = render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    await screen.findByText(ACCOUNT);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm and send' }));
+    // A new compile lands while the send-side inspection is still in flight.
+    rerender(panel(f.session, { output: { ...OUTPUT, program: '0x6002' } }));
+    release(delegatedTo(IMPL));
+    expect(await screen.findByText(/changed while checking/i)).toBeInTheDocument();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps a broadcast hash that the provider attached to a tracking failure', async () => {
+    const hash = `0x${'9d'.repeat(32)}`;
+    const f = fake({
+      send: async () => {
+        throw Object.assign(new Error('could not detect network'), { info: { sendTransactionHash: hash } });
+      },
+    });
+    render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    expect(await screen.findByText(/submitted but not trackable/i)).toBeInTheDocument();
+    expect(screen.getByText(hash)).toBeInTheDocument();
+  });
+
+  it('offers a fresh explicit execution once a receipt settles', async () => {
+    const f = fake();
+    render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await screen.findByText('Confirmed');
+    // The action returns rather than the panel dead-ending, and a second run is
+    // still an explicit choice, never an automatic retry (§8).
+    fireEvent.click(await screen.findByRole('button', { name: 'Execute program' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await waitFor(() => expect(f.sendTransaction).toHaveBeenCalledTimes(2));
+  });
+
+  it('still inspects under StrictMode, whose effects run twice on mount', async () => {
+    const f = fake();
+    render(<StrictMode>
+      <WalletSessionContext.Provider value={f.session}>
+        <WalletExecutionPanel output={OUTPUT} config={CONFIGURED} />
+      </WalletSessionContext.Provider>
+    </StrictMode>);
+    await statusIs('Ready');
+    expect(execute()).toBeEnabled();
+  });
+
+  it('drops a receipt earned on another account instead of showing it here', async () => {
+    const first = fake();
+    const { rerender } = render(panel(first.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await screen.findByText('Confirmed');
+    rerender(panel(fake({ account: OTHER_ACCOUNT, code: () => new Promise<string>(() => {}) }).session));
+    await statusIs('Inspecting account…');
+    expect(screen.queryByText('Confirmed')).not.toBeInTheDocument();
   });
 });

@@ -13,8 +13,12 @@ const DESIGNATOR_PREFIX = '0xef0100';
 /** EIP-7702: 0xef0100 ++ 20-byte implementation address, and nothing else. */
 const DESIGNATOR_HEX_LENGTH = 2 + 6 + 40;
 
+/** Short, UI-safe reason: keeps long provider payloads out of the interface (§12). */
 function reasonText(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
+  const node = cause as { shortMessage?: string } | null;
+  const text = cause instanceof Error ? node?.shortMessage ?? cause.message : String(cause);
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > 140 ? `${flat.slice(0, 137)}...` : flat;
 }
 
 export function parseDelegationCode(code: string | null | undefined): DelegationCode {

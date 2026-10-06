@@ -13,6 +13,25 @@ export interface NormalizedError {
   readonly cause?: unknown;
 }
 
+/**
+ * A hash attached to a failure after the broadcast itself succeeded — ethers sets
+ * `sendTransactionHash` when `eth_sendTransaction` resolved but the transaction
+ * could not be fetched back. Losing it would leave no way to learn the outcome.
+ */
+export function broadcastHash(cause: unknown): string | null {
+  const seen = new Set<unknown>();
+  const walk = (value: unknown, depth: number): string | null => {
+    if (depth > 4 || seen.has(value)) return null;
+    const node = record(value);
+    if (node === null) return null;
+    seen.add(node);
+    const attached = node.sendTransactionHash ?? record(node.info)?.sendTransactionHash;
+    if (typeof attached === 'string' && /^0x[0-9a-fA-F]{64}$/.test(attached)) return attached;
+    return walk(node.info, depth + 1) ?? walk(node.cause, depth + 1);
+  };
+  return walk(cause, 0);
+}
+
 const MESSAGES: Readonly<Record<LisaErrorCode, string>> = {
   WALLET_DISCONNECTED: 'Wallet is not connected.',
   USER_REJECTED: 'Request rejected in the wallet.',

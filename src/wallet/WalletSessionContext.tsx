@@ -103,6 +103,10 @@ export function WalletSessionProvider({ children }: { children: ReactNode }) {
       await provider?.send('wallet_switchEthereumChain', [{ chainId: `0x${BigInt(target).toString(16)}` }]);
       refresh();
     },
+    // eth_accounts, not a cached signer address: this is what the wallet is on now.
+    walletAccounts: async () => (provider === null
+      ? []
+      : ((await provider.send('eth_accounts', [])) as string[]).map(getAddress)),
   }), [connecting, state, provider, signer, reader, wallet, connect, disconnect, refresh]);
 
   return <WalletSessionContext.Provider value={value}>{children}</WalletSessionContext.Provider>;

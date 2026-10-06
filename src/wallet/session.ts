@@ -25,6 +25,12 @@ export interface WalletSession {
   connectWallet(): Promise<void>;
   disconnectWallet(): Promise<void>;
   switchChain(chainId: string): Promise<void>;
+  /**
+   * Accounts the wallet reports as connected *right now*. A signer caches its
+   * address, so this is the only way to honour "verify the account has not
+   * changed" immediately before sending (§14).
+   */
+  walletAccounts(): Promise<string[]>;
 }
 
 function unavailable(action: string): Promise<never> {
@@ -43,6 +49,7 @@ export const DISCONNECTED_SESSION: WalletSession = {
   connectWallet: () => unavailable('connect'),
   disconnectWallet: () => unavailable('disconnect'),
   switchChain: () => unavailable('switch network'),
+  walletAccounts: async () => [],
 };
 
 export const WalletSessionContext = createContext<WalletSession>(DISCONNECTED_SESSION);
