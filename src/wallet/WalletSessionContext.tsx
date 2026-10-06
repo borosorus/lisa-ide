@@ -4,7 +4,7 @@ import { BrowserProvider, getAddress } from 'ethers';
 import type { AccountReader } from '../lisa-account/types';
 import { normalizeError } from './errors';
 import { normalizeChainId } from './executionState';
-import { WalletSessionContext, type WalletSession } from './session';
+import { WalletSessionContext, requestChainSwitch, type WalletSession } from './session';
 
 /**
  * Adapts one connected Web3-Onboard wallet into a `WalletSession` (AGENTS.md §1).
@@ -60,6 +60,9 @@ export function WalletSessionProvider({ children }: { children: ReactNode }) {
         ]);
         if (!live) return;
         const account = getAddress(await next.getAddress());
+        // A second await, so a second checkpoint: publishing after a cleanup would
+        // pair a stale account with whatever chain the session moved to (§2, §14).
+        if (!live) return;
         setSigner(next);
         setState({ status: 'ready', account, chainId: normalizeChainId(network.chainId), message: null });
       } catch (cause) {
@@ -98,9 +101,12 @@ export function WalletSessionProvider({ children }: { children: ReactNode }) {
       refresh();
     },
     switchChain: async chainId => {
-      const target = normalizeChainId(chainId);
-      if (target === null) throw new Error('Chain id is not a valid number');
-      await provider?.send('wallet_switchEthereumChain', [{ chainId: `0x${BigInt(target).toString(16)}` }]);
+      // Refresh only on success: a rejected switch left the chain alone, and a
+      // spurious re-resolution would suggest the session had moved.
+      await requestChainSwitch(
+        provider === null ? null : async (method: string, params: unknown[]) => provider.send(method, params),
+        chainId,
+      );
       refresh();
     },
     // eth_accounts, not a cached signer address: this is what the wallet is on now.
