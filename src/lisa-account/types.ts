@@ -5,9 +5,9 @@
  * is meant to be extractable as a standalone package later (AGENTS.md §2, §15).
  */
 
-/** Deployment addresses live in app configuration, never in the VM package (§3). */
+/** One explicit deployment on one explicit chain (AGENTS.md §1); multi-chain registries are a non-goal. */
 export type DeploymentConfig =
-  | { readonly kind: 'configured'; readonly implementation: string; readonly runtime: string }
+  | { readonly kind: 'configured'; readonly chainId: string; readonly runtime: string; readonly implementation: string }
   | { readonly kind: 'unconfigured' }
   | { readonly kind: 'invalid'; readonly reason: string };
 
@@ -31,6 +31,8 @@ export type LisaAccountStatus =
   | { readonly kind: 'invalid-delegation'; readonly reason: string }
   | { readonly kind: 'invalid-lisa'; readonly implementation: string; readonly reason: string }
   | { readonly kind: 'runtime-mismatch'; readonly implementation: string; readonly runtime: string; readonly expected: string }
+  /** The account names the configured runtime, but that address has no code (§3). */
+  | { readonly kind: 'runtime-no-code'; readonly implementation: string; readonly runtime: string }
   | { readonly kind: 'ready'; readonly implementation: string; readonly runtime: string };
 
 /**

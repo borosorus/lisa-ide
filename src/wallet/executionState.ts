@@ -26,12 +26,14 @@ export type ExecutionGate =
   | { kind: 'wallet-error'; reason: string }
   | { kind: 'unconfigured' }
   | { kind: 'invalid-config'; reason: string }
+  | { kind: 'wrong-chain'; expected: string; actual: string }
   | { kind: 'inspecting' }
   | { kind: 'undelegated' }
   | { kind: 'other-delegation'; implementation: string }
   | { kind: 'invalid-delegation'; reason: string }
   | { kind: 'invalid-lisa'; implementation: string; reason: string }
   | { kind: 'runtime-mismatch'; implementation: string; runtime: string; expected: string }
+  | { kind: 'runtime-no-code'; runtime: string }
   | { kind: 'rpc-error'; reason: string }
   | { kind: 'no-program' }
   | { kind: 'ready'; account: string; runtime: string };
@@ -47,14 +49,8 @@ export type TransactionPhase =
 
 export const IDLE: TransactionPhase = { kind: 'idle' };
 
-/** Hex (`0x1`) and decimal (`1`) both normalize to a decimal string. */
-export function normalizeChainId(value: string | number | bigint | null | undefined): string | null {
-  if (value === null || value === undefined) return null;
-  const text = String(value).trim().toLowerCase();
-  const hex = /^0x([0-9a-f]+)$/.exec(text);
-  if (hex) return BigInt(`0x${hex[1]}`).toString();
-  return /^\d+$/.test(text) ? BigInt(text).toString() : null;
-}
+/** Re-exported so the wallet and the deployment config apply one rule (§1). */
+export { normalizeChainId } from '../lisa-account/chain';
 
 export function inspectionIsCurrent(
   inspection: Inspection | null,
@@ -78,6 +74,12 @@ export function deriveGate(input: {
   if (session.status === 'error') return { kind: 'wallet-error', reason: session.message ?? 'Wallet connection failed.' };
   if (config.kind === 'unconfigured') return { kind: 'unconfigured' };
   if (config.kind === 'invalid') return { kind: 'invalid-config', reason: config.reason };
+  // Nothing on another chain belongs to this deployment, so nothing here may be
+  // read as if it did: same address, different account (§2).
+  if (session.chainId !== null && session.chainId !== config.chainId) {
+    return { kind: 'wrong-chain', expected: config.chainId, actual: session.chainId };
+  }
+  if (session.chainId === null || session.account === null) return { kind: 'inspecting' };
   // A stored inspection belongs to the account and chain it was taken on.
   const current = inspectionIsCurrent(input.inspection, session.account, session.chainId) ? input.inspection : null;
   if (current === null) {
@@ -90,6 +92,7 @@ export function deriveGate(input: {
     case 'ready': break;
     case 'unconfigured': return { kind: 'unconfigured' };
     case 'invalid-config': return { kind: 'invalid-config', reason: current.status.reason };
+    case 'runtime-no-code': return { kind: 'runtime-no-code', runtime: current.status.runtime };
     case 'runtime-mismatch': {
       const mismatch = current.status;
       return { kind: 'runtime-mismatch', implementation: mismatch.implementation, runtime: mismatch.runtime, expected: mismatch.expected };
@@ -116,14 +119,18 @@ export function describeGate(gate: ExecutionGate): string {
     case 'wallet-error': return 'Wallet error';
     case 'unconfigured': return 'LISA deployment not configured';
     case 'invalid-config': return 'Invalid deployment configuration';
+    case 'wrong-chain': return 'Connected to the wrong network';
     case 'inspecting': return 'Inspecting account…';
     case 'undelegated': return 'Account has no LISA delegation';
     case 'other-delegation': return 'Delegated to another implementation';
     case 'invalid-delegation': return 'Malformed delegation';
     case 'invalid-lisa': return 'LisaAccount is not usable';
+    case 'runtime-no-code': return 'Configured runtime has no code';
     case 'runtime-mismatch': return 'LisaAccount runtime mismatch';
     case 'rpc-error': return 'Account inspection failed';
-    case 'no-program': return 'Ready · no compiled program';
+    // Not "no compiled program": an imported artifact is compiled, it just is not
+    // ours to run (§4). The alert gives the reason; the chip stays true either way.
+    case 'no-program': return 'No executable program';
     case 'ready': return 'Ready';
   }
 }

@@ -15,7 +15,9 @@ const IMPL = '0x3333333333333333333333333333333333333333';
 const RUNTIME = '0x4444444444444444444444444444444444444444';
 const FOREIGN = '0x5555555555555555555555555555555555555555';
 
-const CONFIGURED: DeploymentConfig = { kind: 'configured', implementation: IMPL, runtime: RUNTIME };
+/** The fake session's chain and the chain its deployment is configured for. */
+const CHAIN = '1';
+const CONFIGURED: DeploymentConfig = { kind: 'configured', chainId: CHAIN, runtime: RUNTIME, implementation: IMPL };
 const OUTPUT: CompileOutput = {
   program: '0x6001',
   programHash: '0xaaaabbbbccccddddeeeeffff000011112222333344445555666677778888999a',
@@ -31,10 +33,14 @@ interface Fake {
   readonly session: WalletSession;
   readonly reader: AccountReader;
   readonly sendTransaction: ReturnType<typeof vi.fn>;
+  /** What the wallet reports right now; a test can move it mid-flight. */
+  readonly live: { account: string; chainId: string; accounts: string[] };
 }
 
 interface Options {
-  code?: string | (() => Promise<string>);
+  code?: string | ((address: string) => Promise<string>);
+  /** What sits at the configured runtime address; anything non-empty counts as deployed. */
+  runtimeCode?: string | (() => Promise<string>);
   runtimeAddress?: string;
   account?: string;
   /** What the signer reports at signing time; differs from `account` to test races. */
@@ -46,12 +52,23 @@ interface Options {
   output?: CompileOutput | null;
   config?: DeploymentConfig;
   send?: () => Promise<{ hash: string; wait: () => Promise<{ status: number; blockNumber: number } | null> }>;
+  switchChain?: (chainId: string) => Promise<void>;
 }
 
 function fake(options: Options = {}): Fake {
   const code = options.code ?? delegatedTo(IMPL);
+  const runtimeCode = options.runtimeCode ?? '0x6080604052';
+  const live = {
+    account: options.account ?? ACCOUNT,
+    chainId: options.signerChainId ?? options.chainId ?? CHAIN,
+    accounts: options.walletAccounts ?? [options.account ?? ACCOUNT],
+  };
   const reader: AccountReader = {
-    getCode: vi.fn(typeof code === 'function' ? code : async () => code),
+    // Address-aware, as a real reader is: the delegation lives on the account, the
+    // bytecode on the runtime, and conflating them would hide a missing deployment.
+    getCode: vi.fn(async (address: string) => (address.toLowerCase() === RUNTIME.toLowerCase()
+      ? typeof runtimeCode === 'function' ? runtimeCode() : runtimeCode
+      : typeof code === 'function' ? code(address) : code)),
     call: vi.fn(async () => runtimeWord(options.runtimeAddress ?? RUNTIME)),
   };
   const sendTransaction = options.send === undefined
@@ -62,15 +79,16 @@ function fake(options: Options = {}): Fake {
     status: 'ready',
     reader,
     account: options.account ?? ACCOUNT,
-    chainId: options.chainId ?? '1',
-    walletAccounts: vi.fn(async () => options.walletAccounts ?? [options.account ?? ACCOUNT]),
+    chainId: options.chainId ?? CHAIN,
+    walletAccounts: vi.fn(async () => live.accounts),
+    switchChain: vi.fn(options.switchChain ?? (async () => {})),
     signer: {
-      getAddress: vi.fn(async () => options.signerAccount ?? options.account ?? ACCOUNT),
+      getAddress: vi.fn(async () => options.signerAccount ?? live.account),
       sendTransaction,
-      provider: { getNetwork: vi.fn(async () => ({ chainId: BigInt(options.signerChainId ?? options.chainId ?? '1') })) },
+      provider: { getNetwork: vi.fn(async () => ({ chainId: BigInt(live.chainId) })) },
     } as unknown as JsonRpcSigner,
   };
-  return { session, reader, sendTransaction };
+  return { session, reader, sendTransaction, live };
 }
 
 function panel(session: WalletSession, over: { output?: CompileOutput | null; config?: DeploymentConfig } = {}) {
@@ -114,7 +132,7 @@ describe('WalletExecutionPanel', () => {
   it('disables execution while there is no current compiled program (§6)', async () => {
     const f = fake();
     render(panel(f.session, { output: null }));
-    await statusIs('no compiled program');
+    await statusIs('No executable program');
     expect(execute()).toBeDisabled();
   });
 
@@ -266,8 +284,33 @@ describe('WalletExecutionPanel', () => {
     const { rerender } = render(panel(first.session));
     await statusIs('Ready');
     rerender(panel(fake({ chainId: '11155111', code: () => new Promise<string>(() => {}) }).session));
-    await statusIs('Inspecting account…');
+    await statusIs('Connected to the wrong network');
     expect(execute()).toBeDisabled();
+  });
+
+  it('reads nothing at all on a chain the deployment is not on (§2)', async () => {
+    const switchChain = vi.fn(async () => {});
+    const f = fake({ chainId: '11155111', switchChain });
+    render(panel(f.session));
+    await statusIs(/wrong network/i);
+    // Not "unknown account" after a doomed read: the account is simply not here.
+    expect(screen.getByRole('status')).toHaveTextContent(/chain 11155111/);
+    expect(f.reader.getCode).not.toHaveBeenCalled();
+    expect(f.reader.call).not.toHaveBeenCalled();
+    expect(execute()).toBeDisabled();
+    // Switching is offered, and only happens when the user asks for it (§2).
+    expect(switchChain).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Switch network' }));
+    await waitFor(() => expect(switchChain).toHaveBeenCalledWith(CHAIN));
+  });
+
+  it('reports a runtime address that has no code, and never calls it ready (§3)', async () => {
+    const f = fake({ runtimeCode: '0x' });
+    render(panel(f.session));
+    await statusIs('Configured runtime has no code');
+    expect(execute()).toBeDisabled();
+    expect(f.reader.getCode).toHaveBeenCalledWith(RUNTIME);
+    expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 
   it('re-inspects a replacement program only when the account or chain moved', async () => {
@@ -304,6 +347,25 @@ describe('WalletExecutionPanel', () => {
     fireEvent.click(execute());
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
     expect(await screen.findByText(/reports no connected account/i)).toBeInTheDocument();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('asks the wallet again after the send-side inspection, not only before it', async () => {
+    // The inspection is where the time goes: one read of the runtime completes the
+    // panel's readiness, the second one is the send's and is parked here. If the
+    // wallet moves during it, nothing may still be broadcast.
+    let release!: (code: string) => void;
+    const parked = new Promise<string>(resolve => { release = resolve });
+    let reads = 0;
+    const f = fake({ runtimeCode: async () => (++reads > 1 ? parked : '0x60') });
+    render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await waitFor(() => expect(reads).toBe(2));
+    f.live.chainId = '11155111';
+    release('0x60');
+    expect(await screen.findByText(/chain changed while checking/i)).toBeInTheDocument();
     expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 

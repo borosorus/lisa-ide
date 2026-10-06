@@ -69,6 +69,12 @@ export async function inspectLisaAccount(
   }
 
   if (runtime.toLowerCase() === config.runtime.toLowerCase()) {
+    // Naming a runtime proves intent, not existence — an address that never had
+    // code deployed satisfies the match just as well, so check for code (§3).
+    const code = await reader.getCode(config.runtime);
+    if (code === null || code.trim() === '' || code.trim().toLowerCase() === '0x') {
+      return { kind: 'runtime-no-code', implementation: delegation.implementation, runtime };
+    }
     return { kind: 'ready', implementation: delegation.implementation, runtime };
   }
   return { kind: 'runtime-mismatch', implementation: delegation.implementation, runtime, expected: config.runtime };

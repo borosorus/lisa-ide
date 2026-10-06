@@ -53,9 +53,12 @@ function gateAlert(gate: ExecutionGate): { severity: 'error' | 'info' | 'success
     case 'other-delegation': return { severity: 'error', text: `Account is delegated to ${gate.implementation}, not the configured LisaAccount implementation.` };
     case 'invalid-delegation': return { severity: 'error', text: `Delegation designator is malformed: ${gate.reason}` };
     case 'invalid-lisa': return { severity: 'error', text: `Delegated to the configured LisaAccount but ${gate.reason}` };
+    case 'runtime-no-code': return { severity: 'error', text: `Configured runtime ${gate.runtime} has no code deployed. Check VITE_LISA_RUNTIME_ADDRESS.` };
     case 'runtime-mismatch': return { severity: 'error', text: `LisaAccount runtime ${gate.runtime} does not match the configured runtime ${gate.expected}.` };
+    case 'wrong-chain': return { severity: 'error', text: `Connected to chain ${gate.actual}; the configured LISA deployment is on chain ${gate.expected}. The account is not inspected or executed here.` };
     case 'rpc-error': return { severity: 'error', text: gate.reason };
-    case 'no-program': return { severity: 'info', text: 'Account is ready. Compile a program to enable execution.' };
+    // One message covers both ways there is no executable program (§4).
+    case 'no-program': return { severity: 'info', text: 'No current compiled program. Compile from the editor to enable execution; an imported artifact is inspected, never executed.' };
     default: return null;
   }
 }
@@ -99,6 +102,9 @@ export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
     setInspection(null);
     setInspectionError(null);
     if (reader === null || account === null || chainId === null || config.kind !== 'configured') return;
+    // On another chain there is nothing to look at: getCode and call would read
+    // some other network's account and be reported as if it were this one (§2).
+    if (chainId !== config.chainId) return;
     let live = true;
     void (async () => {
       try {
@@ -129,6 +135,22 @@ export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
     setPhase({ kind: 'review' });
   }, [output, session.account, session.chainId]);
 
+  // Switching is offered, never performed: the wallet asks, the user answers (§2).
+  const [switching, setSwitching] = useState(false);
+  const [switchMessage, setSwitchMessage] = useState<string | null>(null);
+  const requestSwitch = useCallback(async () => {
+    if (config.kind !== 'configured') return;
+    setSwitching(true);
+    setSwitchMessage(null);
+    try {
+      await session.switchChain(config.chainId);
+    } catch (cause) {
+      setSwitchMessage(normalizeError(cause).message);
+    } finally {
+      setSwitching(false);
+    }
+  }, [config, session]);
+
   const send = useCallback(async () => {
     const wanted = intent.current;
     if (wanted === null) {
@@ -137,6 +159,13 @@ export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
     }
     if (config.kind !== 'configured' || session.signer === null || session.reader === null) {
       setPhase({ kind: 'failed', txHash: null, message: 'Wallet session is no longer ready.' });
+      return;
+    }
+    // The reviewed chain has to satisfy two claims at once: the one the review
+    // rested on, and the one the deployment names. The gate refuses a review on
+    // another chain; this refuses to trust that the gate still applies.
+    if (wanted.chainId !== config.chainId) {
+      setPhase({ kind: 'failed', txHash: null, message: `Review is for chain ${wanted.chainId}; the deployment is on ${config.chainId} — nothing was sent.` });
       return;
     }
     // Everything the review rested on, read from the live values rather than from
@@ -154,24 +183,33 @@ export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
     setPhase({ kind: 'awaiting-confirmation' });
     let txHash = '';
     try {
+      // Both facts come from the wallet rather than the last render, and each has
+      // to match the value the review was built on and the one the deployment
+      // names. `stage` only words the message; the claim is the same each time.
+      const walletUnchanged = async (stage: string) => {
+        const [accounts, network] = await Promise.all([
+          session.walletAccounts(),
+          session.signer!.provider.getNetwork(),
+        ]);
+        if (accounts.length === 0) {
+          throw new LisaError('WALLET_DISCONNECTED', 'Wallet reports no connected account — nothing was sent.');
+        }
+        if (!accounts.some(a => a.toLowerCase() === wanted.account.toLowerCase())) {
+          throw new LisaError('WALLET_DISCONNECTED', `Connected account changed ${stage} — nothing was sent.`);
+        }
+        const liveChain = normalizeChainId(network.chainId);
+        if (liveChain !== wanted.chainId || liveChain !== config.chainId) {
+          throw new LisaError('WRONG_CHAIN', `Connected chain changed ${stage} — nothing was sent.`);
+        }
+      };
       // A JsonRpcSigner caches the address it was built with, so asking it who is
       // connected says nothing about the wallet now. Ask the wallet instead (§14).
-      const [signerAddress, network, accounts] = await Promise.all([
-        session.signer.getAddress(),
-        session.signer.provider.getNetwork(),
-        session.walletAccounts(),
-      ]);
+      const signerAddress = await session.signer.getAddress();
       if (!unchanged()) throw new LisaError('WALLET_DISCONNECTED', 'Session changed while checking — nothing was sent.');
-      if (accounts.length === 0) {
-        throw new LisaError('WALLET_DISCONNECTED', 'Wallet reports no connected account — nothing was sent.');
-      }
-      if (signerAddress.toLowerCase() !== wanted.account.toLowerCase()
-          || !accounts.some(a => a.toLowerCase() === wanted.account.toLowerCase())) {
+      if (signerAddress.toLowerCase() !== wanted.account.toLowerCase()) {
         throw new LisaError('WALLET_DISCONNECTED', 'Connected account changed before sending — nothing was sent.');
       }
-      if (normalizeChainId(network.chainId) !== wanted.chainId) {
-        throw new LisaError('WRONG_CHAIN', 'Connected chain changed before sending — nothing was sent.');
-      }
+      await walletUnchanged('before sending');
       const status = await inspectLisaAccount(session.reader, wanted.account, config);
       if (status.kind !== 'ready') {
         throw new LisaError(
@@ -179,6 +217,10 @@ export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
           `Account is no longer a ready LisaAccount (${status.kind}) — nothing was sent.`,
         );
       }
+      // Reading the chain and the delegation takes time, and the wallet can move
+      // during it. The last render is not evidence of what the wallet is on now,
+      // so ask again immediately before the one thing that cannot be undone.
+      await walletUnchanged('while checking');
       if (!unchanged()) {
         throw new LisaError('WALLET_DISCONNECTED', 'Program, account, or chain changed while checking — nothing was sent.');
       }
@@ -240,7 +282,16 @@ export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
             : <Button size="small" variant="contained" disabled={!canExecute(gate)} onClick={review}>Execute program</Button>}
       </Box>
     </Stack>
-    {alert !== null && phase.kind !== 'review' && <Alert severity={alert.severity} sx={{ mt: 1 }} role="status">{alert.text}</Alert>}
+    {alert !== null && phase.kind !== 'review' && <Alert
+      severity={alert.severity} sx={{ mt: 1 }} role="status"
+      action={gate.kind === 'wrong-chain'
+        ? <Button size="small" color="inherit" disabled={switching} onClick={() => void requestSwitch()}>
+          {switching ? 'Switching…' : 'Switch network'}
+        </Button>
+        : undefined}>
+      {alert.text}
+      {gate.kind === 'wrong-chain' && switchMessage !== null && <Box component="div" sx={{ mt: 0.5 }}>{switchMessage}</Box>}
+    </Alert>}
 
     {phase.kind === 'review' && output !== null && session.account !== null && <>
       <Alert severity="info" sx={{ mt: 1 }}>

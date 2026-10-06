@@ -1,21 +1,23 @@
 import { getAddress, isAddress } from 'ethers';
+import { normalizeChainId } from './chain';
 import type { DeploymentConfig } from './types';
 
 /**
- * Deployment configuration (AGENTS.md §3): two optional addresses, validated
- * before anything uses them. Nothing here reads `import.meta.env` — callers
- * hand in the values so this stays unit-testable without env stubbing.
+ * Deployment configuration (AGENTS.md §3): one deployment on one chain, fully
+ * specified or absent. Nothing here reads `import.meta.env` — callers hand in the
+ * values so this stays unit-testable without env stubbing.
  */
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
+export const CHAIN_ID_ENV = 'VITE_LISA_CHAIN_ID';
 export const RUNTIME_ENV = 'VITE_LISA_RUNTIME_ADDRESS';
 export const IMPLEMENTATION_ENV = 'VITE_LISA_ACCOUNT_IMPLEMENTATION_ADDRESS';
 
-export interface DeploymentEnv {
-  readonly VITE_LISA_RUNTIME_ADDRESS?: string;
-  readonly VITE_LISA_ACCOUNT_IMPLEMENTATION_ADDRESS?: string;
-}
+/** Reported, and required together, in this order. */
+const ENV_ORDER = [CHAIN_ID_ENV, RUNTIME_ENV, IMPLEMENTATION_ENV] as const;
+
+export type DeploymentEnv = Partial<Record<(typeof ENV_ORDER)[number], string>>;
 
 function present(value: string | undefined): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -37,18 +39,30 @@ function check(name: string, value: string): DeploymentConfig | null {
   return null;
 }
 
-/** Missing variables are a normal state; malformed ones are not (§3). */
+/** Missing variables are a normal state; partial or malformed ones are not (§3). */
 export function parseDeploymentConfig(env: DeploymentEnv): DeploymentConfig {
-  const runtime = present(env.VITE_LISA_RUNTIME_ADDRESS);
-  const implementation = present(env.VITE_LISA_ACCOUNT_IMPLEMENTATION_ADDRESS);
-  if (runtime === null && implementation === null) return { kind: 'unconfigured' };
-  if (runtime === null) return reject(RUNTIME_ENV, 'is not set');
-  if (implementation === null) return reject(IMPLEMENTATION_ENV, 'is not set');
-  const invalid = check(RUNTIME_ENV, runtime) ?? check(IMPLEMENTATION_ENV, implementation);
+  const values: Record<(typeof ENV_ORDER)[number], string | null> = {
+    [CHAIN_ID_ENV]: present(env[CHAIN_ID_ENV]),
+    [RUNTIME_ENV]: present(env[RUNTIME_ENV]),
+    [IMPLEMENTATION_ENV]: present(env[IMPLEMENTATION_ENV]),
+  };
+  if (values[CHAIN_ID_ENV] === null && values[RUNTIME_ENV] === null && values[IMPLEMENTATION_ENV] === null) {
+    return { kind: 'unconfigured' };
+  }
+  const missing = ENV_ORDER.find(name => values[name] === null);
+  if (missing !== undefined) return reject(missing, 'is not set');
+
+  // `0` parses as a number but is not a chain anyone can deploy on.
+  const chainId = normalizeChainId(values[CHAIN_ID_ENV]);
+  if (chainId === null || chainId === '0') return reject(CHAIN_ID_ENV, `is not a chain id: ${values[CHAIN_ID_ENV]}`);
+
+  const invalid = check(RUNTIME_ENV, values[RUNTIME_ENV]!) ?? check(IMPLEMENTATION_ENV, values[IMPLEMENTATION_ENV]!);
   if (invalid !== null) return invalid;
+
   return {
     kind: 'configured',
-    runtime: getAddress(runtime),
-    implementation: getAddress(implementation),
+    chainId,
+    runtime: getAddress(values[RUNTIME_ENV]!),
+    implementation: getAddress(values[IMPLEMENTATION_ENV]!),
   };
 }

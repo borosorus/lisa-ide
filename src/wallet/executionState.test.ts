@@ -8,6 +8,7 @@ import type { DeploymentConfig } from '../lisa-account/types';
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
 const CONFIG = {
   kind: 'configured' as const,
+  chainId: '1',
   implementation: '0x3333333333333333333333333333333333333333',
   runtime: '0x4444444444444444444444444444444444444444',
 };
@@ -81,12 +82,23 @@ describe('deriveGate', () => {
       .toEqual({ kind: 'rpc-error', reason: 'Network request failed.' });
   });
 
-  it('discards an inspection taken on another account or chain (§14, §16)', () => {
+  it('discards an inspection taken on another account (§14, §16)', () => {
     const stored: Inspection = { account: ACCOUNT, chainId: '1', status: { kind: 'ready', implementation: CONFIG.implementation, runtime: CONFIG.runtime } };
     const other = '0x2222222222222222222222222222222222222222';
     expect(deriveGate({ session: { ...READY, account: other }, config: CONFIG, inspection: stored, inspectionError: null, hasProgram: true }))
       .toEqual({ kind: 'inspecting' });
-    expect(deriveGate({ session: { ...READY, chainId: '11155111' }, config: CONFIG, inspection: stored, inspectionError: null, hasProgram: true }))
+  });
+
+  it('refuses an account on a chain the deployment is not on, inspection and all (§2)', () => {
+    const stored: Inspection = { account: ACCOUNT, chainId: '1', status: { kind: 'ready', implementation: CONFIG.implementation, runtime: CONFIG.runtime } };
+    // A ready inspection taken on the right chain says nothing about this session,
+    // and the chain is checked first: no stored inspection is even consulted.
+    const wrong = deriveGate({ session: { ...READY, chainId: '11155111' }, config: CONFIG, inspection: stored, inspectionError: null, hasProgram: true });
+    expect(wrong).toEqual({ kind: 'wrong-chain', expected: '1', actual: '11155111' });
+    expect(canExecute(wrong)).toBe(false);
+    expect(describeGate(wrong)).toContain('wrong network');
+    // An unknown chain fails closed rather than guessing which network this is.
+    expect(deriveGate({ session: { ...READY, chainId: null }, config: CONFIG, inspection: stored, inspectionError: null, hasProgram: true }))
       .toEqual({ kind: 'inspecting' });
   });
 
@@ -106,6 +118,7 @@ describe('deriveGate', () => {
       [{ kind: 'other-delegation', implementation: '0x5555555555555555555555555555555555555555' }, 'other-delegation'],
       [{ kind: 'invalid-delegation', reason: 'short' }, 'invalid-delegation'],
       [{ kind: 'invalid-lisa', implementation: CONFIG.implementation, reason: 'reverted' }, 'invalid-lisa'],
+      [{ kind: 'runtime-no-code', implementation: CONFIG.implementation, runtime: CONFIG.runtime }, 'runtime-no-code'],
       [{ kind: 'runtime-mismatch', implementation: CONFIG.implementation, runtime: '0x5555555555555555555555555555555555555555', expected: CONFIG.runtime }, 'runtime-mismatch'],
     ];
     for (const [status, kind] of cases) {
@@ -119,6 +132,6 @@ describe('deriveGate', () => {
   it('labels each state for the compact status row (§7)', () => {
     expect(describeGate({ kind: 'unconfigured' })).toBe('LISA deployment not configured');
     expect(describeGate({ kind: 'ready', account: ACCOUNT, runtime: CONFIG.runtime })).toBe('Ready');
-    expect(describeGate({ kind: 'no-program' })).toContain('no compiled program');
+    expect(describeGate({ kind: 'no-program' })).toBe('No executable program');
   });
 });

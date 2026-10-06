@@ -7,8 +7,10 @@ const IMPL = '0x3333333333333333333333333333333333333333';
 const RUNTIME = '0x4444444444444444444444444444444444444444';
 const OTHER = '0x5555555555555555555555555555555555555555';
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
+/** Any non-empty bytecode: the check is only that *something* is deployed (§3). */
+const DEPLOYED = '0x60806040523480156100105760008055';
 
-const CONFIG: DeploymentConfig = { kind: 'configured', implementation: IMPL, runtime: RUNTIME };
+const CONFIG: DeploymentConfig = { kind: 'configured', chainId: '11155111', runtime: RUNTIME, implementation: IMPL };
 
 function delegatingTo(address: string): string {
   return `0xef0100${address.slice(2)}`;
@@ -18,10 +20,15 @@ function runtimeWord(address: string): string {
   return lisaAccountInterface.encodeFunctionResult('lisaRuntime', [address]);
 }
 
-function reader(code: string | null | ((address: string) => Promise<string>), call?: () => Promise<string>): AccountReader {
+function reader(
+  code: string | null | ((address: string) => Promise<string>),
+  options: { call?: () => Promise<string>; runtimeCode?: string } = {},
+): AccountReader {
   return {
-    getCode: typeof code === 'function' ? vi.fn(code) : vi.fn().mockResolvedValue(code ?? '0x'),
-    call: vi.fn(call ?? (async () => runtimeWord(RUNTIME))),
+    getCode: vi.fn(async (address: string) => (address.toLowerCase() === RUNTIME.toLowerCase()
+      ? options.runtimeCode ?? DEPLOYED
+      : typeof code === 'function' ? code(address) : (code ?? '0x'))),
+    call: vi.fn(options.call ?? (async () => runtimeWord(RUNTIME))),
   };
 }
 
@@ -67,7 +74,7 @@ describe('inspectLisaAccount', () => {
     expect(r.call).not.toHaveBeenCalled();
   });
 
-  it('is ready only when both the implementation and the runtime match', async () => {
+  it('is ready only when the implementation, the runtime and its code all check out', async () => {
     const status = await inspectLisaAccount(reader(delegatingTo(IMPL)), ACCOUNT, CONFIG);
     expect(status).toEqual({ kind: 'ready', implementation: IMPL, runtime: RUNTIME });
     expect(isLisaAccountReady(status)).toBe(true);
@@ -87,17 +94,29 @@ describe('inspectLisaAccount', () => {
   });
 
   it('fails closed when the bound runtime differs (§4)', async () => {
-    const status = await inspectLisaAccount(reader(delegatingTo(IMPL), async () => runtimeWord(OTHER)), ACCOUNT, CONFIG);
+    const status = await inspectLisaAccount(reader(delegatingTo(IMPL), { call: async () => runtimeWord(OTHER) }), ACCOUNT, CONFIG);
     expect(status).toEqual({ kind: 'runtime-mismatch', implementation: IMPL, runtime: OTHER, expected: RUNTIME });
     expect(isLisaAccountReady(status)).toBe(false);
   });
 
+  it('refuses readiness when the configured runtime has no code (§3)', async () => {
+    for (const empty of ['0x', '', '  ']) {
+      const r = reader(delegatingTo(IMPL), { runtimeCode: empty });
+      await expect(inspectLisaAccount(r, ACCOUNT, CONFIG)).resolves.toEqual({ kind: 'runtime-no-code', implementation: IMPL, runtime: RUNTIME });
+      expect(r.getCode).toHaveBeenCalledWith(RUNTIME);
+    }
+    // A runtime mismatch is decided before code is fetched: nothing to check yet.
+    const mismatch = reader(delegatingTo(IMPL), { call: async () => runtimeWord(OTHER) });
+    await inspectLisaAccount(mismatch, ACCOUNT, CONFIG);
+    expect((mismatch.getCode as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])).toEqual([ACCOUNT]);
+  });
+
   it('treats a failing or junk runtime probe as invalid, never ready', async () => {
-    const failing = await inspectLisaAccount(reader(delegatingTo(IMPL), async () => {
+    const failing = await inspectLisaAccount(reader(delegatingTo(IMPL), { call: async () => {
       throw new Error('execution reverted');
-    }), ACCOUNT, CONFIG);
+    } }), ACCOUNT, CONFIG);
     expect(failing.kind).toBe('invalid-lisa');
-    const junk = await inspectLisaAccount(reader(delegatingTo(IMPL), async () => '0x1234'), ACCOUNT, CONFIG);
+    const junk = await inspectLisaAccount(reader(delegatingTo(IMPL), { call: async () => '0x1234' }), ACCOUNT, CONFIG);
     expect(junk.kind).toBe('invalid-lisa');
   });
 
