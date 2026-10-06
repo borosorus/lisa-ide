@@ -18,9 +18,13 @@
     "@emotion/styled": "^11.14.1",
     "@mui/material": "^7.3.2",
     "@noble/hashes": "^2.4.0",
+    "@web3-onboard/core": "^2.24.1",
+    "@web3-onboard/injected-wallets": "^2.11.3",
+    "@web3-onboard/react": "^2.11.0",
     "@xyflow/react": "^12.12.0",
     "acorn": "^8.15.0",
     "codemirror": "^6.0.2",
+    "ethers": "^6.17.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },
