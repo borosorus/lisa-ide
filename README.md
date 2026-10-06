@@ -48,25 +48,42 @@ every LISA action stays disabled behind a short "LISA deployment not configured"
 
 | Variable | Meaning |
 | --- | --- |
+| `VITE_LISA_CHAIN_ID` | Chain the deployment lives on, decimal or hex |
 | `VITE_LISA_RUNTIME_ADDRESS` | Deployed LISA runtime the LisaAccount delegatecalls into |
 | `VITE_LISA_ACCOUNT_IMPLEMENTATION_ADDRESS` | LisaAccount implementation a delegation must point at |
 
 Set them in `.env.local` (see `.env.example`). They are deployment configuration, not VM semantics,
-which is why they live here rather than in `@bosorus/lisa-evm`; both are validated before use, and a
-malformed value is reported rather than used.
+which is why they live here rather than in `@bosorus/lisa-evm`. All three are required together and
+validated before use: absent is a normal, unconfigured build, while a partial or malformed set —
+including a chain id of `0` — is reported as an invalid configuration rather than guessed at. One
+deployment on one chain is all v1 supports.
 
-The flow is: connect an injected wallet → read the connected account's code → accept it only if that
-code is exactly `0xef0100 ++ implementation` for the configured implementation → call `lisaRuntime()`
-on the account and require it to equal the configured runtime → **Execute program** → review the
+The flow is: connect an injected wallet → check it is on the configured chain → read the connected
+account's code → accept it only if that code is exactly `0xef0100 ++ implementation` for the configured
+implementation → call `lisaRuntime()` on the account and require it to equal the configured runtime →
+check that the configured runtime address actually has code at it → **Execute program** → review the
 destination account and the program hash → confirm → `executeLisa(program)` sent **to the connected
 account itself** through its own delegated code → transaction hash, then receipt.
 
-Anything else — no delegation, a foreign implementation, a malformed designator, or a runtime that
-does not match — fails closed: Execute stays disabled and the mismatch is shown. Nothing is sent
+Anything else fails closed, each with its own reason:
+
+- **Wrong network.** An account on another chain is never inspected as if it belonged to this
+  deployment — the same address elsewhere is a different account. No code is read there at all. The
+  strip names both chains and offers **Switch network**, which asks the wallet and only acts on that
+  click; nothing switches by itself.
+- **Runtime with no code.** The account naming a runtime proves intent, not existence, so an empty
+  address that matches the configuration is its own failure state rather than a false "ready".
+- No delegation, a foreign implementation, a malformed designator, or a runtime mismatch.
+
+Nothing is sent
 because compilation succeeded; submitting always follows an explicit click, the account and chain are
 re-checked at that moment, and a failed or reverted transaction is never retried automatically. The
 app never handles private keys, and the wallet layer only consumes the compile output the Worker
 already produced.
+
+An **imported artifact** is inspected, not executed. Its bytes fill the Output panel and its
+disassembly is available, but it did not come from the source on screen, so **Execute program** stays
+disabled until the next compile from the editor or canvas.
 
 Native transaction value is fixed at `0` wei in this version. Installing a delegation ("Enable LISA")
 is not implemented: the account must already be delegated to the configured LisaAccount.
@@ -130,4 +147,4 @@ Press **Compile** or **Ctrl/⌘ + Enter**. Compiler errors retain their source p
 
 Imported artifacts are inspection-only: they show their bytecode, hash, size, and disassembly but do not attempt to recreate authoring source. Exporting an imported artifact preserves its original compiler metadata.
 
-The artifact format is intentionally small so Intereth or another consumer can later accept the same payload without depending on LISA IDE state.
+The artifact format is intentionally small: it carries the bytes, their hash, and the toolchain that produced them, and nothing about the session that produced them.

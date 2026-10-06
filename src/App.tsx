@@ -244,7 +244,7 @@ export default function App() {
       if (revision.current === currentRevision) {
         setImportedArtifact(artifact);
         setOutput(result);
-        setNotice(`Imported ${file.name} · ${artifact.compiler.name} ${artifact.compiler.version}`);
+        setNotice(`Imported ${file.name} · ${artifact.compiler.name} ${artifact.compiler.version} · inspection only`);
       }
     } catch (cause) {
       if (revision.current === currentRevision && (cause as Error).message !== 'Compilation cancelled') {
@@ -314,7 +314,10 @@ export default function App() {
           </Button>
         </Stack>
       </Stack>
-      <WalletExecutionPanel output={output} />
+      {/* Only output the current source compiled to is executable. An imported
+          artifact populates the same inspectors and the same Output panel, but its
+          source is not in front of the user, so it never reaches the sender (§4). */}
+      <WalletExecutionPanel output={importedArtifact === null ? output : null} />
       {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>

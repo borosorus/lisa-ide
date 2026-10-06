@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import { CompilerError } from './compile/client';
+import { createArtifact, hashProgram } from './compile/artifact';
+import { bytesFromHex } from './compile/hex';
 import { PROJECT_STORAGE_KEY } from './visual/storage';
 
 const { compileMock, inspectMock, cancelMock } = vi.hoisted(() => ({
@@ -34,6 +36,11 @@ vi.mock('./editor/SourceEditor', () => ({
     <textarea aria-label="LISA source editor" onChange={event => onChange(event.target.value)} />
     {diagnostic?.line && <span data-testid="editor-diagnostic">{diagnostic.line}:{diagnostic.column}</span>}
   </>,
+}));
+// The panel's own behaviour is its suite's business. Here only the handoff matters:
+// what App is willing to treat as an executable current program (§4).
+vi.mock('./wallet/WalletExecutionPanel', () => ({
+  WalletExecutionPanel: ({ output }: { output: unknown }) => <div data-testid="wallet-output">{output === null ? 'not executable' : 'executable'}</div>,
 }));
 vi.mock('./visual/VisualCanvas', () => ({
   VisualCanvas: (props: Record<string, any>) => <>
@@ -81,6 +88,9 @@ const output = {
   program: '0x00', programHash: '0xhash', byteSize: 1,
   instructionCount: 1, disassembly: ['STOP'],
 };
+
+/** A program whose hash really is its own, so an artifact built from it parses. */
+const IMPORTED_PROGRAM = '0x6001';
 
 const ADDRESS = '0x1111111111111111111111111111111111111111';
 const BALANCE_ABI = JSON.stringify([
@@ -169,6 +179,65 @@ describe('App', () => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       expect(saved.codeSource).toBe('changed');
     });
+  });
+
+  // §4: an artifact is a thing to look at, not a thing to run. The panel is mocked
+  // to report only whether App treats the current output as executable.
+  const executable = () => screen.getByTestId('wallet-output').textContent;
+  const imported = JSON.stringify(createArtifact({
+    ...output, program: IMPORTED_PROGRAM, programHash: hashProgram(bytesFromHex(IMPORTED_PROGRAM)),
+  }));
+
+  /** The picker lives inside the "Import artifact" label button. */
+  const artifactInput = (container: HTMLElement) => container.querySelector('input[type="file"]') as HTMLInputElement;
+
+  async function importProgram(container: HTMLElement, serialized: string, name = 'program.json') {
+    inspectMock.mockResolvedValue({ ...output, program: IMPORTED_PROGRAM });
+    // jsdom's File has no text(); App only ever asks for the name and the body.
+    const file = { name, text: async () => serialized } as unknown as File;
+    fireEvent.change(artifactInput(container), { target: { files: [file] } });
+    return await screen.findByText(new RegExp(`Imported ${name}`));
+  }
+
+  it('offers a locally compiled program to the wallet (§4)', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    expect(executable()).toBe('not executable');
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    expect(executable()).toBe('executable');
+  });
+
+  it('imports an artifact for inspection without making it executable (§4)', async () => {
+    compileMock.mockResolvedValue(output);
+    const { container } = render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    expect(executable()).toBe('executable');
+    // The artifact still fills the output view, and still says what it is.
+    expect(await importProgram(container, imported)).toHaveTextContent('inspection only');
+    expect(await screen.findByLabelText('Compiled bytecode')).toHaveTextContent(IMPORTED_PROGRAM);
+    expect(executable()).toBe('not executable');
+  });
+
+  it('restores executability once an imported artifact is superseded by a compile (§4)', async () => {
+    compileMock.mockResolvedValue(output);
+    const { container } = render(<App />);
+    await importProgram(container, imported);
+    expect(executable()).toBe('not executable');
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    expect(executable()).toBe('executable');
+  });
+
+  it('takes the program away from the wallet when the source behind it changes (§4)', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    expect(executable()).toBe('executable');
+    fireEvent.change(screen.getByLabelText('LISA source editor'), { target: { value: 'changed' } });
+    expect(executable()).toBe('not executable');
   });
 
   it('switches between code and visual authoring modes', async () => {
