@@ -8,7 +8,7 @@ import type { CompileDiagnostic } from '../compile/types';
 
 const names = [
   'createProgram', 'encodeCall', 'rawCalldata', 'SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE',
-  'staticCall', 'call', 'if', 'uint256', 'bytes32', 'bool', 'word',
+  'staticCall', 'call', 'if', 'balance', 'revertUnless', 'keccak', 'uint256', 'bytes32', 'bool', 'word',
   'add', 'sub', 'mul', 'div', 'lt', 'gt', 'eq',
 ];
 

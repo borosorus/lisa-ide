@@ -12,3 +12,12 @@ export function bytesFromHex(value: string): Uint8Array {
 export function hexFromBytes(bytes: Uint8Array): string {
   return `0x${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
 }
+
+/**
+ * Byte data as written in a program: 0x-prefixed even-length hex, empty
+ * allowed (`0x` hashes and calls with no payload). The prefix is required so
+ * a bare word can never be read as either text or hex by accident.
+ */
+export function isBytesHex(value: string): boolean {
+  return /^0x(?:[0-9a-fA-F]{2})*$/.test(value);
+}

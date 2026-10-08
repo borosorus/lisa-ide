@@ -1,7 +1,7 @@
 # LISA IDE
 
 A small browser IDE for writing, compiling, and inspecting LISA programs. It uses the published
-[`@bosorus/lisa-evm`](https://www.npmjs.com/package/@bosorus/lisa-evm) package at version `0.2.0`.
+[`@bosorus/lisa-evm`](https://www.npmjs.com/package/@bosorus/lisa-evm) package at version `0.3.0`.
 The application is static and needs no backend. Wallet execution is optional and inert until a
 deployment is configured — see [Wallet execution](#wallet-execution-optional).
 
@@ -119,8 +119,17 @@ return p;
 
 Available names: `createProgram`, `encodeCall`, `rawCalldata`, `SELF`, `CALLER`,
 `GAS`, `TIMESTAMP`, and `SELFBALANCE`. The supported methods are `p.staticCall`,
-`p.call`, `p.if`, return-data `word`/`uint256`/`bytes32`/`bool`, and value
-`add`/`sub`/`mul`/`div`/`lt`/`gt`/`eq`. Source supports `const` bindings,
+`p.call`, `p.if`, `p.balance`, `p.revertUnless`, `p.keccak`, return-data
+`word`/`uint256`/`bytes32`/`bool`, and value `add`/`sub`/`mul`/`div`/`lt`/`gt`/`eq`.
+`p.balance(address)` reads the balance of the address you pass (SELFBALANCE stays
+the account's own); it reserves no slot and re-reads wherever the value is consumed.
+A read that reaches no emitted instruction — a bare statement, or a comparison
+nothing uses — is refused rather than quietly compiled away.
+`p.revertUnless(condition)` is a statement: it emits the same guard a failed call
+emits, and a LISA revert carries no data. `p.keccak(data)` hashes constant data
+written as `0x` hex and costs one slot — a digest is a word, so pass it to a
+`uint256` argument or compare it, not to a `bytesN` argument, which must be a
+compile-time constant. Source supports `const` bindings,
 strings, numbers, bigints, booleans, arrays, calls, zero-argument block callbacks
 for `p.if`, and a final `return p;`. It does not support imports, type annotations,
 arbitrary JavaScript globals, loops, assignment, general property access, or
@@ -139,7 +148,7 @@ Press **Compile** or **Ctrl/⌘ + Enter**. Compiler errors retain their source p
   "isa": "lisa-v1",
   "program": "0x00",
   "programHash": "0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a",
-  "compiler": { "name": "lisa-tooling", "version": "0.2.0" }
+  "compiler": { "name": "lisa-tooling", "version": "0.3.0" }
 }
 ```
 
