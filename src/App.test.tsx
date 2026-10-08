@@ -118,7 +118,7 @@ describe('App', () => {
 
   /** Add a contract through the dialog and wait for its collapsed row. */
   async function addContract(name = 'USDC', abi = BALANCE_ABI, address = ADDRESS) {
-    fireEvent.click(screen.getByRole('button', { name: '+ Add contract' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } });
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: address } });
     fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: abi } });
@@ -268,7 +268,7 @@ describe('App', () => {
   it('keeps the add-contract dialog contained and rejects an invalid address', async () => {
     render(<App />);
     toVisual();
-    fireEvent.click(screen.getByRole('button', { name: '+ Add contract' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
     // The form only exists inside the dialog, not permanently in the panel.
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Bad' } });
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x123' } });
@@ -423,11 +423,11 @@ describe('App', () => {
   it('collapses the library to widen the canvas', async () => {
     render(<App />);
     toVisual();
-    expect(screen.getByRole('button', { name: '+ Add contract' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add contract' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Collapse library' }));
-    expect(screen.queryByRole('button', { name: '+ Add contract' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add contract' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand library' }));
-    expect(screen.getByRole('button', { name: '+ Add contract' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add contract' })).toBeInTheDocument();
   });
 
   it('connects ports through the canvas', async () => {
@@ -470,7 +470,7 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /Output/, expanded: false })).toBeInTheDocument();
     expect(screen.getByText('idle')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
-    await waitFor(() => expect(screen.getByText('✓ compiled · 1 bytes')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('compiled · 1 bytes')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Output/ }));
     expect(await screen.findByLabelText('Compiled bytecode')).toBeInTheDocument();
   });

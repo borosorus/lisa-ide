@@ -1,8 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, CircularProgress, CssBaseline, IconButton, MenuItem, Paper, Select,
-  Stack, Tab, Tabs, ThemeProvider, ToggleButton, ToggleButtonGroup, Typography, createTheme,
+  Alert, Box, Button, Chip, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
+  Stack, Tab, Tabs, ThemeProvider, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
+import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
+import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
+import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
+import FileUploadRoundedIcon from '@mui/icons-material/FileUploadRounded';
+import CodeRoundedIcon from '@mui/icons-material/CodeRounded';
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
+import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
+import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
+import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
+import TerminalRoundedIcon from '@mui/icons-material/TerminalRounded';
+import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
+import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
+import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded';
+import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { SourceEditor } from './editor/SourceEditor';
 import { SOURCE_EXAMPLES, STARTER_SOURCE } from './editor/examples';
 import { CompilerClient, CompilerError } from './compile/client';
@@ -22,13 +36,8 @@ import { occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containm
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import { WalletExecutionPanel } from './wallet/WalletExecutionPanel';
+import { cssVarStyles, theme } from './theme/theme';
 import './styles.css';
-
-const theme = createTheme({
-  palette: { mode: 'dark', primary: { main: '#8ebdff' }, background: { default: '#0b1220', paper: '#172236' } },
-  typography: { fontFamily: 'Inter, system-ui, sans-serif' },
-  shape: { borderRadius: 10 },
-});
 
 function diagnosticFrom(error: unknown): CompileDiagnostic {
   if (error instanceof CompilerError) return error.diagnostic;
@@ -42,6 +51,14 @@ function diagnosticLabel(diagnostic: CompileDiagnostic) {
 }
 
 const DEFAULT_STORED = { version: 1 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
+
+/** Pane heading: a quiet icon carrying the eye to what the pane is for. */
+function PaneTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+    <Box aria-hidden="true" sx={{ display: 'flex', color: 'text.secondary', '& svg': { fontSize: 18 } }}>{icon}</Box>
+    <Typography variant="subtitle2" noWrap>{children}</Typography>
+  </Stack>;
+}
 
 export default function App() {
   const stored = useRef(loadStoredProject() ?? DEFAULT_STORED).current;
@@ -222,12 +239,15 @@ export default function App() {
     return cause instanceof Error ? cause.message : String(cause);
   }
 
-  /** One-line state shown on the collapsed output bar. */
+  /** Compact state shown on the collapsed output bar. */
   function outputSummary() {
-    if (error) return '⚠ failed';
-    if (busy) return 'compiling…';
-    if (output) return `✓ compiled · ${output.byteSize} bytes`;
-    return 'idle';
+    if (error) return <><WarningRoundedIcon fontSize="small" sx={{ color: 'error.main', fontSize: 18 }} />
+      <Typography variant="caption" color="text.secondary">failed</Typography></>;
+    if (busy) return <><CircularProgress size={12} />
+      <Typography variant="caption" color="text.secondary">compiling…</Typography></>;
+    if (output) return <><CheckCircleOutlineRoundedIcon fontSize="small" sx={{ color: 'success.main', fontSize: 18 }} />
+      <Typography variant="caption" color="text.secondary">compiled · {output.byteSize} bytes</Typography></>;
+    return <Typography variant="caption" color="text.secondary">idle</Typography>;
   }
 
   async function importArtifact(file: File) {
@@ -280,12 +300,16 @@ export default function App() {
 
   return <ThemeProvider theme={theme}>
     <CssBaseline />
+    <GlobalStyles styles={cssVarStyles} />
     <Box className={mode === 'visual' ? 'app app-fixed' : 'app'}>
       <Stack className="topbar" direction="row" alignItems="center" justifyContent="space-between" gap={2}>
-        <Box>
-          <Typography variant="h5" fontWeight={700}>LISA IDE</Typography>
-          <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
-        </Box>
+        <Stack direction="row" alignItems="center" spacing={1.5}>
+          <Box className="brand-mark" aria-hidden="true"><BoltRoundedIcon fontSize="small" /></Box>
+          <Box>
+            <Typography variant="h5" fontWeight={700}>LISA IDE</Typography>
+            <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
+          </Box>
+        </Stack>
         <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end" alignItems="center">
           <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => {
             if (next && next !== mode) {
@@ -293,10 +317,20 @@ export default function App() {
               setMode(next);
             }
           }} aria-label="Authoring mode">
-            <ToggleButton value="code">Code</ToggleButton>
-            <ToggleButton value="visual">Visual</ToggleButton>
+            <ToggleButton value="code">
+              <Stack direction="row" alignItems="center" spacing={0.75}>
+                <CodeRoundedIcon fontSize="small" sx={{ mb: -0.2 }} />
+                <span>Code</span>
+              </Stack>
+            </ToggleButton>
+            <ToggleButton value="visual">
+              <Stack direction="row" alignItems="center" spacing={0.75}>
+                <AccountTreeRoundedIcon fontSize="small" sx={{ mb: -0.2 }} />
+                <span>Visual</span>
+              </Stack>
+            </ToggleButton>
           </ToggleButtonGroup>
-          <Button variant="outlined" component="label" disabled={busy}>
+          <Button variant="outlined" component="label" disabled={busy} startIcon={<FileUploadRoundedIcon fontSize="small" />}>
             Import artifact
             <input
               hidden
@@ -309,7 +343,8 @@ export default function App() {
               }}
             />
           </Button>
-          <Button variant="contained" onClick={compile} disabled={busy} startIcon={busy ? <CircularProgress size={16} /> : undefined}>
+          <Button variant="contained" onClick={compile} disabled={busy}
+            startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <PlayArrowRoundedIcon fontSize="small" />}>
             {busy ? 'Working…' : 'Compile'}
           </Button>
         </Stack>
@@ -321,7 +356,7 @@ export default function App() {
       {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-            <Typography variant="subtitle2">Source</Typography>
+            <PaneTitle icon={<DescriptionRoundedIcon />}>Source</PaneTitle>
             <Stack direction="row" alignItems="center" gap={1}>
               <Select
                 size="small"
@@ -339,7 +374,9 @@ export default function App() {
                   <MenuItem key={example.id} value={example.id}>{example.label}</MenuItem>
                 ))}
               </Select>
-              <Typography variant="caption" color="text.secondary">⌘ / Ctrl + Enter</Typography>
+              <Typography variant="caption" component="span" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                Compile with <kbd>Ctrl/⌘ + Enter</kbd>
+              </Typography>
             </Stack>
           </Stack>
           <SourceEditor
@@ -350,14 +387,14 @@ export default function App() {
           />
         </Paper>
         <Paper className="pane output-pane" elevation={0}>
-          <Box className="pane-heading"><Typography variant="subtitle2">Output</Typography></Box>
+          <Box className="pane-heading"><PaneTitle icon={<TerminalRoundedIcon />}>Output</PaneTitle></Box>
           <Box className="output-content">
             {renderOutput()}
           </Box>
         </Paper>
       </Box> : <Box className={`visual-workspace${libraryOpen ? '' : ' library-collapsed'}`}>
         <Paper className="pane canvas-pane" elevation={0}>
-          <Box className="pane-heading"><Typography variant="subtitle2">Canvas</Typography></Box>
+          <Box className="pane-heading"><PaneTitle icon={<DashboardRoundedIcon />}>Canvas</PaneTitle></Box>
           <VisualCanvas
             canvasApi={canvasApi}
             project={project}
@@ -392,10 +429,12 @@ export default function App() {
         </Paper>
         <Paper className="pane side-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-            {libraryOpen && <Typography variant="subtitle2">Library</Typography>}
+            {libraryOpen && <PaneTitle icon={<LibraryBooksRoundedIcon />}>Library</PaneTitle>}
             <IconButton size="small" aria-label={libraryOpen ? 'Collapse library' : 'Expand library'}
               onClick={() => setLibraryOpen(open => !open)} sx={{ p: 0.5 }}>
-              <Typography variant="body2">{libraryOpen ? '⟩' : '⟨'}</Typography>
+              {libraryOpen
+                ? <ChevronRightRoundedIcon fontSize="small" />
+                : <ChevronLeftRoundedIcon fontSize="small" />}
             </IconButton>
           </Stack>
           {libraryOpen && <>
@@ -430,10 +469,13 @@ export default function App() {
         <Paper className={`pane output-pane${outputOpen ? '' : ' output-collapsed'}`} elevation={0}>
           <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
             <Button size="small" onClick={() => setOutputOpen(open => !open)} aria-expanded={outputOpen}
-              sx={{ justifyContent: 'flex-start', minWidth: 0 }}>
-              {outputOpen ? '▾ Output' : '▸ Output'}
+              startIcon={outputOpen
+                ? <ExpandMoreRoundedIcon fontSize="small" />
+                : <ChevronRightRoundedIcon fontSize="small" />}
+              sx={{ justifyContent: 'flex-start', minWidth: 0, px: 0.5 }}>
+              Output
             </Button>
-            {!outputOpen && <Typography variant="caption" color="text.secondary">{outputSummary()}</Typography>}
+            {!outputOpen && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>{outputSummary()}</Box>}
           </Stack>
           {outputOpen && <Box className="output-content">{renderOutput()}</Box>}
         </Paper>

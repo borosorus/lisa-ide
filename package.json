@@ -16,6 +16,7 @@
     "@codemirror/view": "^6.38.2",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.3.11",
     "@mui/material": "^7.3.2",
     "@noble/hashes": "^2.4.0",
     "@web3-onboard/core": "^2.24.1",

@@ -5,6 +5,7 @@ import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, type CompletionContext } from '@codemirror/autocomplete';
 import { basicSetup } from 'codemirror';
 import type { CompileDiagnostic } from '../compile/types';
+import { tokens } from '../theme/tokens';
 
 const names = [
   'createProgram', 'encodeCall', 'rawCalldata', 'SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE',
@@ -81,15 +82,15 @@ export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
           }),
           EditorView.theme({
-            '&': { height: '100%', fontSize: '14px', backgroundColor: '#101827', color: '#edf3fb' },
+            '&': { height: '100%', fontSize: '14px', backgroundColor: tokens.surface.sunken, color: tokens.text.primary },
             '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
-            '.cm-gutters': { backgroundColor: '#152033', color: '#7790ad', border: 'none' },
-            '.cm-activeLine': { backgroundColor: '#1b2940' },
-            '.cm-activeLineGutter': { backgroundColor: '#1b2940' },
-            '.cm-cursor': { borderLeftColor: '#9ccaff' },
-            '.cm-selectionBackground': { backgroundColor: '#344c70 !important' },
-            '.cm-lisa-error-line': { backgroundColor: 'rgba(244, 67, 54, 0.10)' },
-            '.cm-lisa-error-char': { textDecoration: 'underline wavy #ff6b6b', textUnderlineOffset: '3px' },
+            '.cm-gutters': { backgroundColor: tokens.surface.sunken, color: tokens.text.muted, border: 'none' },
+            '.cm-activeLine': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.07)` },
+            '.cm-activeLineGutter': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.07)` },
+            '.cm-cursor': { borderLeftColor: tokens.accent.primary },
+            '.cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.28) !important` },
+            '.cm-lisa-error-line': { backgroundColor: `rgba(${tokens.status.dangerRgb}, 0.12)` },
+            '.cm-lisa-error-char': { textDecoration: `underline wavy ${tokens.status.danger}`, textUnderlineOffset: '3px' },
           }),
         ],
       }),
