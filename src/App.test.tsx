@@ -520,6 +520,19 @@ describe('App', () => {
     expect(await screen.findByLabelText('Compiled bytecode')).toBeInTheDocument();
   });
 
+  it('keeps the Execute action on the collapsed output bar, never behind the toggle', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    toVisual();
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await waitFor(() => expect(screen.getByText('compiled · 1 bytes')).toBeInTheDocument());
+    // The bar stays collapsed and the action stays on it — disabled here only
+    // because no wallet is connected; never merely because the pane is shut.
+    expect(screen.getByRole('button', { name: 'Execute program' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
+    expect(screen.getByRole('button', { name: 'Execute program' })).toBeInTheDocument();
+  });
+
   it('invalidates compiled output when switching authoring modes', async () => {
     compileMock.mockResolvedValue(output);
     render(<App />);

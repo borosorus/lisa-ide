@@ -20,9 +20,16 @@ import { useWalletSession, type WalletSession } from './session';
  * CompileOutput the IDE is already showing and the session the wallet reports.
  */
 
-/** A phase that reports an on-chain fact survives a new compile; intent does not. */
+/**
+ * A phase survives a new compile when it is either an on-chain fact already
+ * earned or a broadcast still being tracked. Intent — a review not yet sent —
+ * does not: a changed program makes an unconfirmed review stale. A failure
+ * that carries a hash was broadcast and must outlive the compile, because the
+ * hash is the only handle left to learn the outcome (§8).
+ */
 function keepPhase(phase: TransactionPhase): boolean {
-  return PHASES_THAT_SURVIVE.has(phase.kind);
+  if (PHASES_THAT_SURVIVE.has(phase.kind)) return true;
+  return phase.kind === 'failed' && phase.txHash !== null && phase.txHash !== '';
 }
 const PHASES_THAT_SURVIVE = new Set(['submitted', 'confirmed', 'reverted']);
 
@@ -53,6 +60,14 @@ export interface ExecutionController {
   send(): Promise<void>;
   /** Abandon the review without sending. */
   cancelReview(): void;
+  /**
+   * Close the review window without abandoning the transaction. Purely visual:
+   * receipt tracking lives in the controller, so dismissing shows the receipt
+   * inline instead of in the dialog, never hides it.
+   */
+  dismiss(): void;
+  /** True while the execution dialog should be on screen. */
+  readonly dialogOpen: boolean;
   requestSwitch(): Promise<void>;
   readonly switching: boolean;
   readonly switchMessage: string | null;
@@ -86,7 +101,16 @@ export function useWalletExecution(
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [inspectionError, setInspectionError] = useState<string | null>(null);
   const [phase, setPhase] = useState<TransactionPhase>(IDLE);
+  // The execution window is requested by review() and withdrawn by the user;
+  // it survives the phase transitions of the transaction it is watching, and
+  // hides itself the moment there is no phase left to watch.
+  const [dialogRequested, setDialogRequested] = useState(false);
   const intent = useRef<Intent | null>(null);
+  // A broadcast is in flight between the awaiting transition and the receipt
+  // (or its failure). While this is true, no input change may drop the phase
+  // to idle: that would hide the one status the user is waiting on and let a
+  // second review race the send still resolving. Cleared on every terminal.
+  const sendInFlight = useRef(false);
   const mounted = useRef(false);
   // StrictMode replays mount effects, so "is this instance still alive?" has to be
   // answered by the setup half rather than the initial value, or StrictMode's
@@ -139,19 +163,24 @@ export function useWalletExecution(
   // already earned. An account or chain change drops the receipt too: it belongs
   // to the session it was taken on (§14, §16).
   useEffect(() => {
-    setPhase(current => (keepPhase(current) ? current : IDLE));
+    setPhase(current => (keepPhase(current) || sendInFlight.current ? current : IDLE));
     intent.current = null;
   }, [account, chainId, output]);
   useEffect(() => {
-    setPhase(IDLE);
+    setPhase(current => (sendInFlight.current ? current : IDLE));
     intent.current = null;
   }, [account, chainId]);
 
   const review = useCallback(() => {
     if (output === null || session.account === null || session.chainId === null) return;
     intent.current = { program: output.program, account: session.account, chainId: session.chainId };
+    setDialogRequested(true);
     setPhase({ kind: 'review' });
   }, [output, session.account, session.chainId]);
+
+  // Closing the window is purely visual once there is a live transaction to
+  // track: the receipt keeps updating in the controller either way (§8).
+  const dismiss = useCallback(() => setDialogRequested(false), []);
 
   // Switching is offered, never performed: the wallet asks, the user answers (§2).
   const [switching, setSwitching] = useState(false);
@@ -199,6 +228,7 @@ export function useWalletExecution(
       return;
     }
     setPhase({ kind: 'awaiting-confirmation' });
+    sendInFlight.current = true;
     let txHash = '';
     try {
       // Both facts come from the wallet rather than the last render, and each has
@@ -267,11 +297,16 @@ export function useWalletExecution(
           ? { kind: 'reverted', txHash }
           : { kind: 'failed', txHash: txHash === '' ? null : txHash, message: error.message });
       }
+    } finally {
+      // Whatever the outcome, the broadcast is no longer unresolved — input
+      // changes may resume clearing the phase from here on.
+      sendInFlight.current = false;
     }
   }, [config, session.signer, session.reader, session.walletAccounts]);
 
   const cancelReview = useCallback(() => {
     intent.current = null;
+    setDialogRequested(false);
     setPhase(IDLE);
   }, []);
 
@@ -279,6 +314,8 @@ export function useWalletExecution(
     session, config, output, gate, phase,
     canExecute: canExecute(gate),
     alert: gateAlert(gate),
-    review, send, cancelReview, requestSwitch, switching, switchMessage,
+    // A requested window with nothing left to watch is no window at all.
+    dialogOpen: dialogRequested && phase.kind !== 'idle',
+    review, send, cancelReview, dismiss, requestSwitch, switching, switchMessage,
   };
 }

@@ -1,26 +1,23 @@
 import { Alert, Box, Button, Chip, Divider, Paper, Stack, Typography } from '@mui/material';
 import { describeGate } from './executionState';
-import { ExecuteBlocks, ExecuteButton } from './ExecuteActions';
 import type { ExecutionController } from './useWalletExecution';
 
 /**
  * The wallet strip: session identity and LISA readiness, one row shared by
- * both authoring modes. It is a pure view of the execution controller — the
- * Execute action renders here only while the Output panel is collapsed in
- * visual mode; while it is open, the action lives beside the program.
+ * both authoring modes. It is a pure view of the execution controller and a
+ * pure status surface — the Execute action belongs to the Output pane, the
+ * program's own home, and the review itself happens in the centered dialog.
  */
 
 interface Props {
   readonly execution: ExecutionController;
-  /** Where the Execute action currently lives; exactly one location renders it. */
-  readonly executeLocation?: 'strip' | 'output';
 }
 
 function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-export function WalletExecutionPanel({ execution, executeLocation = 'strip' }: Props) {
+export function WalletExecutionPanel({ execution }: Props) {
   const { session, gate, phase, alert } = execution;
   const statusColor = gate.kind === 'ready' ? 'success' : gate.kind === 'inspecting' || gate.kind === 'wallet-connecting' ? 'default' : 'warning';
 
@@ -41,10 +38,9 @@ export function WalletExecutionPanel({ execution, executeLocation = 'strip' }: P
       <Typography variant="overline" color="text.secondary">LISA</Typography>
       <Chip size="small" color={statusColor} data-testid="lisa-status" label={describeGate(gate)} />
       {gate.kind === 'ready' && <Chip size="small" variant="outlined" label={`Runtime ${gate.runtime}`} />}
-      {executeLocation === 'strip' && <Box sx={{ ml: 'auto' }}><ExecuteButton execution={execution} /></Box>}
     </Stack>
-    {/* The gate explanation and the network switch are the strip's own status
-        story: always here, wherever the Execute action happens to live. */}
+    {/* The gate explanation is the strip's own story: it stays here no matter
+        which pane hosts the action and whether a review window is open. */}
     {alert !== null && phase.kind !== 'review' && <Alert
       severity={alert.severity} sx={{ mt: 1 }} role="status"
       action={gate.kind === 'wrong-chain'
@@ -56,6 +52,5 @@ export function WalletExecutionPanel({ execution, executeLocation = 'strip' }: P
       {gate.kind === 'wrong-chain' && execution.switchMessage !== null
         && <Box component="div" sx={{ mt: 0.5 }}>{execution.switchMessage}</Box>}
     </Alert>}
-    {executeLocation === 'strip' && <ExecuteBlocks execution={execution} />}
   </Paper>;
 }

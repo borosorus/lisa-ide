@@ -31,7 +31,8 @@ import { occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containm
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import { WalletExecutionPanel } from './wallet/WalletExecutionPanel';
-import { ExecuteActions } from './wallet/ExecuteActions';
+import { ExecuteBlocks, ExecuteButton } from './wallet/ExecuteActions';
+import { ExecutionDialog } from './wallet/ExecutionDialog';
 import { useWalletExecution } from './wallet/useWalletExecution';
 import { Toolbar } from './shell/Toolbar';
 import { OutputPanel } from './shell/OutputPanel';
@@ -96,11 +97,14 @@ export default function App() {
    * Only output the current source compiled to is executable. An imported
    * artifact populates the same inspectors and the same Output panel, but its
    * source is not in front of the user, so it never reaches the sender (§4).
-   * The Execute action follows the program: the Output panel while it is
-   * open, the wallet strip only while the visual canvas has it collapsed.
+   * The Execute action follows the program into the Output pane's own header
+   * — expanded or collapsed, code or visual — so the action is never behind
+   * a toggle; what the user verifies before a broadcast is a centered window.
    */
   const execution = useWalletExecution(importedArtifact === null ? output : null);
-  const executeLocation: 'strip' | 'output' = mode === 'visual' && !outputOpen ? 'strip' : 'output';
+  // Mounted in exactly one header at a time: the mode branch and the collapse
+  // state decide, and both cannot show simultaneously.
+  const executeSlot = <ExecuteButton execution={execution} />;
 
   function replaceSource(next: string, nextNotice = '') {
     if (next === source) {
@@ -345,7 +349,7 @@ export default function App() {
     busy={busy}
     imported={importedArtifact !== null}
     generated={generated}
-    actions={executeLocation === 'output' ? <ExecuteActions execution={execution} /> : undefined}
+    actions={<ExecuteBlocks execution={execution} />}
     onCopy={copy}
     onDownload={download}
     onErrorReveal={line => editorRef.current?.revealLine(line)}
@@ -362,7 +366,7 @@ export default function App() {
         onCompile={compile}
         onImportFile={file => void importArtifact(file)}
       />
-      <WalletExecutionPanel execution={execution} executeLocation={executeLocation} />
+      <WalletExecutionPanel execution={execution} />
       {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
@@ -398,7 +402,10 @@ export default function App() {
           />
         </Paper>
         <Paper className="pane output-pane" elevation={0}>
-          <Box className="pane-heading"><PaneTitle icon={<TerminalRoundedIcon />}>Output</PaneTitle></Box>
+          <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+            <PaneTitle icon={<TerminalRoundedIcon />}>Output</PaneTitle>
+            {executeSlot}
+          </Stack>
           <Box className="output-content">{outputPanel}</Box>
         </Paper>
       </Box> : <Box className={`visual-workspace${libraryOpen ? '' : ' library-collapsed'}`}>
@@ -477,11 +484,18 @@ export default function App() {
               sx={{ justifyContent: 'flex-start', minWidth: 0, px: 0.5 }}>
               Output
             </Button>
-            {!outputOpen && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>{outputSummary()}</Box>}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {!outputOpen && outputSummary()}
+              {executeSlot}
+            </Box>
           </Stack>
+          {/* Collapsed, this bar is the program's whole visible surface — so a
+              dismissed transaction's receipt lives here too, until it is empty. */}
+          {!outputOpen && <Box sx={{ px: 1.5, pb: 1 }}><ExecuteBlocks execution={execution} /></Box>}
           {outputOpen && <Box className="output-content">{outputPanel}</Box>}
         </Paper>
       </Box>}
+      <ExecutionDialog execution={execution} />
       <Snackbar
         open={undo !== null}
         autoHideDuration={7000}
