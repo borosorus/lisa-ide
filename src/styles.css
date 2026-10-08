@@ -87,3 +87,9 @@ body { background: #0b1220; }
   color: #ffcda3; font: 600 11px/1.4 inherit; padding: 2px 9px; border-radius: 8px; cursor: pointer;
 }
 .if-enable-else:hover { border-color: #ffb478; background: rgba(255, 180, 120, 0.14); color: #ffe4cd; }
+
+/* Wallet/execution strip: one row shared by both authoring modes, so neither
+   grid changes and the panel never grows into an execution workspace. */
+.wallet-strip { flex: none; padding: 9px 24px; border-radius: 0; border: 0; border-bottom: 1px solid #26354c; background: #121c2e; }
+.wallet-strip code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: #bdd4f1; }
+@media (max-width: 850px) { .wallet-strip { padding: 9px 16px; } }

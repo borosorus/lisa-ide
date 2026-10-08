@@ -5,6 +5,7 @@ import {
   type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type Vec2, type VisualProject,
 } from './model';
 import { canonicalInputType, isValidAddress } from './abi';
+import { isBytesHex } from '../compile/hex';
 import type { ContractFunction, ContractResource } from './model';
 
 /**
@@ -211,6 +212,13 @@ function parseNode(value: unknown): GraphNode | null {
     case 'binary':
       if (!BINARY_OPS.includes(value.op as never)) return null;
       return { ...base, kind: 'binary', op: value.op as BinaryOp };
+    case 'balance':
+      return { ...base, kind: 'balance' };
+    case 'keccak':
+      if (typeof value.data !== 'string' || !isBytesHex(value.data)) return null;
+      return { ...base, kind: 'keccak', data: value.data };
+    case 'guard':
+      return { ...base, kind: 'guard' };
     case 'if':
       return { ...base, kind: 'if', ...(value.hasElse === true ? { hasElse: true } : {}) };
     default:

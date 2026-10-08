@@ -42,6 +42,26 @@ p.call(TARGET, rawCalldata("0x12345678"));
 
 return p;`,
   },
+  {
+    id: 'guard-and-hash',
+    label: 'Guard, balance, hash',
+    description: 'Revert unless the caller holds a balance, and pass a hashed constant through a call.',
+    source: `const p = createProgram();
+const TOKEN = "0x1111111111111111111111111111111111111111";
+const VAULT = "0x2222222222222222222222222222222222222222";
+const CLAIM = "0x3333333333333333333333333333333333333333";
+
+p.revertUnless(p.balance(CALLER).gt(1n));
+
+const claimId = p.keccak("0x4c495341");
+p.call(CLAIM, encodeCall("redeem(uint256)", [claimId]));
+
+p.if(p.balance(TOKEN).gt(0n), () => {
+  p.call(VAULT, encodeCall("settle()"));
+});
+
+return p;`,
+  },
 ];
 
 export const STARTER_SOURCE = SOURCE_EXAMPLES[0].source;

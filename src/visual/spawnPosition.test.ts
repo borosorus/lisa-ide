@@ -123,4 +123,10 @@ describe('spawnPositionInBounds', () => {
     }
     expect(spawnPositionInBounds({ anchor: { x: 200, y: 150 }, size: SIZE, occupied, bounds: BOUNDS })).toBeNull();
   });
+
+  it('sizes the new cards by the rows they render', () => {
+    expect(nodeSize({ id: 'b', kind: 'balance' }, emptyProject())).toEqual({ width: 200, height: 108 });
+    expect(nodeSize({ id: 'g', kind: 'guard' }, emptyProject())).toEqual({ width: 180, height: 79 });
+    expect(nodeSize({ id: 'h', kind: 'keccak', data: '0x00' }, emptyProject())).toEqual({ width: 180, height: 79 });
+  });
 });

@@ -118,6 +118,9 @@ export type BinaryOp = (typeof BINARY_OPS)[number];
 export const LITERAL_TYPES = ['uint', 'address', 'bool'] as const;
 export type LiteralType = (typeof LITERAL_TYPES)[number];
 
+/** Byte data a new hash node starts with: valid empty-ish data, one byte. */
+export const DEFAULT_HASH_DATA = '0x00';
+
 /** The single grammar for literal text, shared by validation, UI, and storage. */
 export function isValidLiteral(type: LiteralType, text: string): boolean {
   return type === 'uint' ? /^(0x[0-9a-fA-F]+|\d+)$/.test(text)
@@ -150,6 +153,9 @@ export type GraphNode =
   | (NodeBase & { readonly kind: 'context'; readonly name: ContextName })
   | (NodeBase & { readonly kind: 'literal'; readonly literalType: LiteralType; readonly literal: string })
   | (NodeBase & { readonly kind: 'binary'; readonly op: BinaryOp })
+  | (NodeBase & { readonly kind: 'balance' })
+  | (NodeBase & { readonly kind: 'keccak'; readonly data: string })
+  | (NodeBase & { readonly kind: 'guard' })
   | (NodeBase & { readonly kind: 'if'; readonly hasElse?: boolean });
 
 export interface GraphEndpoint {

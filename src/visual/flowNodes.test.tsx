@@ -165,3 +165,27 @@ describe('LisaNode interaction states', () => {
     expect(edit.resize.mock.calls[0][1]).toEqual({ width: 260, height: 150 });
   });
 });
+
+describe('balance, hash, and guard cards', () => {
+  it('exposes an address input and a balance output on the balance card', () => {
+    renderNode({ id: 'bal1', kind: 'balance' }, emptyProject());
+    expect(screen.getByTitle('address (address)')).toBeInTheDocument();
+    expect(screen.getByTitle('balance (out)')).toBeInTheDocument();
+  });
+
+  it('gives a guard its condition input and no output', () => {
+    renderNode({ id: 'guard1', kind: 'guard' }, emptyProject());
+    expect(screen.getByTitle('unless (condition)')).toBeInTheDocument();
+    expect(screen.queryByTitle('balance (out)')).not.toBeInTheDocument();
+  });
+
+  it('commits hash data only when it is byte data', () => {
+    const patch = renderNode({ id: 'hash1', kind: 'keccak', data: '0x00' }, emptyProject());
+    const input = screen.getByLabelText('Hash data') as HTMLInputElement;
+    expect(input.value).toBe('0x00');
+    fireEvent.change(input, { target: { value: '0x0a1b' } });
+    expect(patch).toHaveBeenCalledWith('hash1', { data: '0x0a1b' });
+    fireEvent.change(input, { target: { value: '0x0a1' } });
+    expect(patch).toHaveBeenCalledTimes(1);
+  });
+});
