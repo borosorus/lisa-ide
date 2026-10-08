@@ -7,6 +7,7 @@ import { lisaAccountInterface } from '../lisa-account/abi';
 import type { AccountReader, DeploymentConfig } from '../lisa-account/types';
 import type { CompileOutput } from '../compile/types';
 import { WalletExecutionPanel } from './WalletExecutionPanel';
+import { useWalletExecution } from './useWalletExecution';
 import { WalletSessionContext, DISCONNECTED_SESSION, type WalletSession } from './session';
 
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
@@ -91,11 +92,21 @@ function fake(options: Options = {}): Fake {
   return { session, reader, sendTransaction, live };
 }
 
+/** The composition App owns: controller + strip view, under a fake session. */
+function Harness({ output, config, location = 'strip' }: {
+  output: CompileOutput | null;
+  config: DeploymentConfig;
+  location?: 'strip' | 'output';
+}) {
+  const execution = useWalletExecution(output, config);
+  return <WalletExecutionPanel execution={execution} executeLocation={location} />;
+}
+
 function panel(session: WalletSession, over: { output?: CompileOutput | null; config?: DeploymentConfig } = {}) {
   // `null` must stay null: it means "no current compiled program" (§6).
   const output: CompileOutput | null = 'output' in over ? (over.output as CompileOutput | null) : OUTPUT;
   return <WalletSessionContext.Provider value={session}>
-    <WalletExecutionPanel output={output} config={over.config ?? CONFIGURED} />
+    <Harness output={output} config={over.config ?? CONFIGURED} />
   </WalletSessionContext.Provider>;
 }
 
@@ -419,7 +430,7 @@ describe('WalletExecutionPanel', () => {
     const f = fake();
     render(<StrictMode>
       <WalletSessionContext.Provider value={f.session}>
-        <WalletExecutionPanel output={OUTPUT} config={CONFIGURED} />
+        <Harness output={OUTPUT} config={CONFIGURED} />
       </WalletSessionContext.Provider>
     </StrictMode>);
     await statusIs('Ready');

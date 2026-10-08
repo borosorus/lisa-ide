@@ -1,258 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button, Chip, Divider, Paper, Stack, Typography } from '@mui/material';
-import type { CompileOutput } from '../compile/types';
-import { inspectLisaAccount } from '../lisa-account/inspect';
-import { prepareExecuteLisaTransaction } from '../lisa-account/execute';
-import { LisaError } from '../lisa-account/types';
-import { DEPLOYMENT, deploymentLabel } from './deployment';
-import { broadcastHash, normalizeError } from './errors';
-import {
-  canExecute, deriveGate, describeGate, describePhase, IDLE,
-  normalizeChainId,
-  type ExecutionGate, type Inspection, type SessionSnapshot, type TransactionPhase,
-} from './executionState';
-import { useWalletSession, type WalletSession } from './session';
+import { describeGate } from './executionState';
+import { ExecuteBlocks, ExecuteButton } from './ExecuteActions';
+import type { ExecutionController } from './useWalletExecution';
 
 /**
- * The whole wallet surface: one compact strip. It consumes
- * the CompileOutput the IDE is already showing — it never compiles (§6) and never
- * touches a private key (§14). Native value is fixed at 0 (§9).
+ * The wallet strip: session identity and LISA readiness, one row shared by
+ * both authoring modes. It is a pure view of the execution controller — the
+ * Execute action renders here only while the Output panel is collapsed in
+ * visual mode; while it is open, the action lives beside the program.
  */
 
 interface Props {
-  readonly output: CompileOutput | null;
-  /** Overridable for tests; production builds use the env-derived config (§3). */
-  readonly config?: typeof DEPLOYMENT;
+  readonly execution: ExecutionController;
+  /** Where the Execute action currently lives; exactly one location renders it. */
+  readonly executeLocation?: 'strip' | 'output';
 }
-
-const TX_FACTS = new Set(['submitted', 'confirmed', 'reverted']);
 
 function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-/** A phase that reports an on-chain fact survives a new compile; intent does not. */
-function keepPhase(phase: TransactionPhase): boolean {
-  return TX_FACTS.has(phase.kind);
-}
-
-/** What the reviewed transaction was built on, captured at the moment of review. */
-interface Intent {
-  readonly program: string;
-  readonly account: string;
-  readonly chainId: string;
-}
-
-function gateAlert(gate: ExecutionGate): { severity: 'error' | 'info' | 'success'; text: string } | null {
-  switch (gate.kind) {
-    case 'wallet-disconnected': return { severity: 'info', text: 'Connect a wallet to inspect its LisaAccount.' };
-    case 'wallet-error': return { severity: 'error', text: gate.reason };
-    case 'unconfigured': return { severity: 'info', text: `LISA deployment not configured. ${deploymentLabel()}` };
-    case 'invalid-config': return { severity: 'error', text: deploymentLabel({ kind: 'invalid', reason: gate.reason }) };
-    case 'undelegated': return { severity: 'info', text: 'This account has no EIP-7702 delegation. Execution stays disabled until it is delegated to the configured LisaAccount.' };
-    case 'other-delegation': return { severity: 'error', text: `Account is delegated to ${gate.implementation}, not the configured LisaAccount implementation.` };
-    case 'invalid-delegation': return { severity: 'error', text: `Delegation designator is malformed: ${gate.reason}` };
-    case 'invalid-lisa': return { severity: 'error', text: `Delegated to the configured LisaAccount but ${gate.reason}` };
-    case 'runtime-no-code': return { severity: 'error', text: `Configured runtime ${gate.runtime} has no code deployed. Check VITE_LISA_RUNTIME_ADDRESS.` };
-    case 'runtime-mismatch': return { severity: 'error', text: `LisaAccount runtime ${gate.runtime} does not match the configured runtime ${gate.expected}.` };
-    case 'wrong-chain': return { severity: 'error', text: `Connected to chain ${gate.actual}; the configured LISA deployment is on chain ${gate.expected}. The account is not inspected or executed here.` };
-    case 'rpc-error': return { severity: 'error', text: gate.reason };
-    // One message covers both ways there is no executable program (§4).
-    case 'no-program': return { severity: 'info', text: 'No current compiled program. Compile from the editor to enable execution; an imported artifact is inspected, never executed.' };
-    default: return null;
-  }
-}
-
-export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
-  const session = useWalletSession();
-  const [inspection, setInspection] = useState<Inspection | null>(null);
-  const [inspectionError, setInspectionError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<TransactionPhase>(IDLE);
-  const intent = useRef<Intent | null>(null);
-  const mounted = useRef(false);
-  // StrictMode replays mount effects, so "is this instance still alive?" has to be
-  // answered by the setup half rather than the initial value, or StrictMode's
-  // cleanup would discard every result that arrives afterwards.
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false };
-  }, []);
-
-  // Updated on every render so the last checkpoint before broadcasting can see a
-  // state that arrived while an earlier await was still in flight.
-  const now = useRef<{
-    program: string | null;
-    account: string | null;
-    chainId: string | null;
-    status: WalletSession['status'];
-  }>({ program: output?.program ?? null, account: session.account, chainId: session.chainId, status: session.status });
-  now.current = { program: output?.program ?? null, account: session.account, chainId: session.chainId, status: session.status };
-
-  const snapshot = useMemo<SessionSnapshot>(() => ({
-    status: session.status, account: session.account, chainId: session.chainId, message: session.message,
-  }), [session.status, session.account, session.chainId, session.message]);
-  const gate = deriveGate({
-    session: snapshot, config, inspection, inspectionError, hasProgram: output !== null,
-  });
-
-  // Inspect the account the session is on now; a result for any other
-  // account/chain pair is never usable, so the key is stored with it (§14).
-  const { reader, account, chainId } = session;
-  useEffect(() => {
-    setInspection(null);
-    setInspectionError(null);
-    if (reader === null || account === null || chainId === null || config.kind !== 'configured') return;
-    // On another chain there is nothing to look at: getCode and call would read
-    // some other network's account and be reported as if it were this one (§2).
-    if (chainId !== config.chainId) return;
-    let live = true;
-    void (async () => {
-      try {
-        const status = await inspectLisaAccount(reader, account, config);
-        if (live && mounted.current) setInspection({ account, chainId, status });
-      } catch (cause) {
-        if (live && mounted.current) setInspectionError(normalizeError(cause).message);
-      }
-    })();
-    return () => { live = false };
-  }, [reader, account, chainId, config]);
-
-  // A new or replaced compile result drops any pending intent, but not a receipt
-  // already earned. An account or chain change drops the receipt too: it belongs
-  // to the session it was taken on (§14, §16).
-  useEffect(() => {
-    setPhase(current => (keepPhase(current) ? current : IDLE));
-    intent.current = null;
-  }, [account, chainId, output]);
-  useEffect(() => {
-    setPhase(IDLE);
-    intent.current = null;
-  }, [account, chainId]);
-
-  const review = useCallback(() => {
-    if (output === null || session.account === null || session.chainId === null) return;
-    intent.current = { program: output.program, account: session.account, chainId: session.chainId };
-    setPhase({ kind: 'review' });
-  }, [output, session.account, session.chainId]);
-
-  // Switching is offered, never performed: the wallet asks, the user answers (§2).
-  const [switching, setSwitching] = useState(false);
-  const [switchMessage, setSwitchMessage] = useState<string | null>(null);
-  const requestSwitch = useCallback(async () => {
-    if (config.kind !== 'configured') return;
-    setSwitching(true);
-    setSwitchMessage(null);
-    try {
-      await session.switchChain(config.chainId);
-    } catch (cause) {
-      setSwitchMessage(normalizeError(cause).message);
-    } finally {
-      setSwitching(false);
-    }
-  }, [config, session]);
-
-  const send = useCallback(async () => {
-    const wanted = intent.current;
-    if (wanted === null) {
-      setPhase({ kind: 'failed', txHash: null, message: 'Nothing was reviewed — nothing was sent.' });
-      return;
-    }
-    if (config.kind !== 'configured' || session.signer === null || session.reader === null) {
-      setPhase({ kind: 'failed', txHash: null, message: 'Wallet session is no longer ready.' });
-      return;
-    }
-    // The reviewed chain has to satisfy two claims at once: the one the review
-    // rested on, and the one the deployment names. The gate refuses a review on
-    // another chain; this refuses to trust that the gate still applies.
-    if (wanted.chainId !== config.chainId) {
-      setPhase({ kind: 'failed', txHash: null, message: `Review is for chain ${wanted.chainId}; the deployment is on ${config.chainId} — nothing was sent.` });
-      return;
-    }
-    // Everything the review rested on, read from the live values rather than from
-    // anything this closure captured, and re-checked after every await below.
-    const unchanged = () => {
-      const live = now.current;
-      return live.status === 'ready' && live.program === wanted.program
-        && (live.account ?? '').toLowerCase() === wanted.account.toLowerCase()
-        && live.chainId === wanted.chainId;
-    };
-    if (!unchanged()) {
-      setPhase({ kind: 'failed', txHash: null, message: 'Program, account, or chain changed after review — nothing was sent.' });
-      return;
-    }
-    setPhase({ kind: 'awaiting-confirmation' });
-    let txHash = '';
-    try {
-      // Both facts come from the wallet rather than the last render, and each has
-      // to match the value the review was built on and the one the deployment
-      // names. `stage` only words the message; the claim is the same each time.
-      const walletUnchanged = async (stage: string) => {
-        const [accounts, network] = await Promise.all([
-          session.walletAccounts(),
-          session.signer!.provider.getNetwork(),
-        ]);
-        if (accounts.length === 0) {
-          throw new LisaError('WALLET_DISCONNECTED', 'Wallet reports no connected account — nothing was sent.');
-        }
-        if (!accounts.some(a => a.toLowerCase() === wanted.account.toLowerCase())) {
-          throw new LisaError('WALLET_DISCONNECTED', `Connected account changed ${stage} — nothing was sent.`);
-        }
-        const liveChain = normalizeChainId(network.chainId);
-        if (liveChain !== wanted.chainId || liveChain !== config.chainId) {
-          throw new LisaError('WRONG_CHAIN', `Connected chain changed ${stage} — nothing was sent.`);
-        }
-      };
-      // A JsonRpcSigner caches the address it was built with, so asking it who is
-      // connected says nothing about the wallet now. Ask the wallet instead (§14).
-      const signerAddress = await session.signer.getAddress();
-      if (!unchanged()) throw new LisaError('WALLET_DISCONNECTED', 'Session changed while checking — nothing was sent.');
-      if (signerAddress.toLowerCase() !== wanted.account.toLowerCase()) {
-        throw new LisaError('WALLET_DISCONNECTED', 'Connected account changed before sending — nothing was sent.');
-      }
-      await walletUnchanged('before sending');
-      const status = await inspectLisaAccount(session.reader, wanted.account, config);
-      if (status.kind !== 'ready') {
-        throw new LisaError(
-          status.kind === 'runtime-mismatch' ? 'RUNTIME_MISMATCH' : 'UNKNOWN_DELEGATION',
-          `Account is no longer a ready LisaAccount (${status.kind}) — nothing was sent.`,
-        );
-      }
-      // Reading the chain and the delegation takes time, and the wallet can move
-      // during it. The last render is not evidence of what the wallet is on now,
-      // so ask again immediately before the one thing that cannot be undone.
-      await walletUnchanged('while checking');
-      if (!unchanged()) {
-        throw new LisaError('WALLET_DISCONNECTED', 'Program, account, or chain changed while checking — nothing was sent.');
-      }
-      const transaction = prepareExecuteLisaTransaction({ account: wanted.account, program: wanted.program, status });
-      const sent = await session.signer.sendTransaction(transaction);
-      txHash = sent.hash ?? '';
-      if (!mounted.current) return;
-      setPhase({ kind: 'submitted', txHash });
-      const receipt = await sent.wait();
-      if (!mounted.current) return;
-      if (receipt === null) setPhase({ kind: 'failed', txHash, message: 'No receipt received.' });
-      else if (receipt.status === 1) setPhase({ kind: 'confirmed', txHash, blockNumber: receipt.blockNumber });
-      else if (receipt.status === 0) setPhase({ kind: 'reverted', txHash });
-      else setPhase({ kind: 'failed', txHash, message: 'Receipt status is unavailable.' });
-    } catch (cause) {
-      if (!mounted.current) return;
-      const error = normalizeError(cause);
-      // A broadcast can succeed while tracking it fails; the hash has to survive
-      // that, or there is no way left to find out what happened.
-      const broadcast = txHash === '' ? broadcastHash(cause) : null;
-      // No automatic retry, in any branch (§8).
-      if (broadcast !== null) {
-        setPhase({ kind: 'failed', txHash: broadcast, message: 'Submitted but not trackable — follow the hash for its result.' });
-      } else {
-        setPhase(error.code === 'TRANSACTION_REVERTED'
-          ? { kind: 'reverted', txHash }
-          : { kind: 'failed', txHash: txHash === '' ? null : txHash, message: error.message });
-      }
-    }
-  }, [config, session.signer, session.reader, session.walletAccounts]);
-
-  const alert = gateAlert(gate);
+export function WalletExecutionPanel({ execution, executeLocation = 'strip' }: Props) {
+  const { session, gate, phase, alert } = execution;
   const statusColor = gate.kind === 'ready' ? 'success' : gate.kind === 'inspecting' || gate.kind === 'wallet-connecting' ? 'default' : 'warning';
 
   return <Paper className="wallet-strip" elevation={0} variant="outlined">
@@ -272,61 +41,19 @@ export function WalletExecutionPanel({ output, config = DEPLOYMENT }: Props) {
       <Typography variant="overline" color="text.secondary">LISA</Typography>
       <Chip size="small" color={statusColor} data-testid="lisa-status" label={describeGate(gate)} />
       {gate.kind === 'ready' && <Chip size="small" variant="outlined" label={`Runtime ${gate.runtime}`} />}
-      <Box sx={{ ml: 'auto' }}>
-        {phase.kind === 'awaiting-confirmation'
-          ? <Typography variant="body2" color="text.secondary">{describePhase(phase)}</Typography>
-          // While a receipt is being awaited, the receipt row owns the status and
-          // a second send would race the first. Once it settles, the action returns.
-          : phase.kind === 'submitted'
-            ? null
-            : <Button size="small" variant="contained" disabled={!canExecute(gate)} onClick={review}>Execute program</Button>}
-      </Box>
+      {executeLocation === 'strip' && <Box sx={{ ml: 'auto' }}><ExecuteButton execution={execution} /></Box>}
     </Stack>
-    {alert !== null && phase.kind !== 'review' && <Alert
+    {executeLocation === 'strip' && alert !== null && phase.kind !== 'review' && <Alert
       severity={alert.severity} sx={{ mt: 1 }} role="status"
       action={gate.kind === 'wrong-chain'
-        ? <Button size="small" color="inherit" disabled={switching} onClick={() => void requestSwitch()}>
-          {switching ? 'Switching…' : 'Switch network'}
+        ? <Button size="small" color="inherit" disabled={execution.switching} onClick={() => void execution.requestSwitch()}>
+          {execution.switching ? 'Switching…' : 'Switch network'}
         </Button>
         : undefined}>
       {alert.text}
-      {gate.kind === 'wrong-chain' && switchMessage !== null && <Box component="div" sx={{ mt: 0.5 }}>{switchMessage}</Box>}
+      {gate.kind === 'wrong-chain' && execution.switchMessage !== null
+        && <Box component="div" sx={{ mt: 0.5 }}>{execution.switchMessage}</Box>}
     </Alert>}
-
-    {phase.kind === 'review' && output !== null && session.account !== null && <>
-      <Alert severity="info" sx={{ mt: 1 }}>
-        <Stack spacing={0.5}>
-          <Typography variant="body2">Destination (transaction is sent to this account)</Typography>
-          <Box component="code" sx={{ overflowWrap: 'anywhere' }}>{session.account}</Box>
-          <Typography variant="body2">Program hash</Typography>
-          <Box component="code" sx={{ overflowWrap: 'anywhere' }}>{output.programHash}</Box>
-          <Typography variant="body2">
-            {output.byteSize} bytes · executeLisa(bytes) · value 0 wei · chain {session.chainId ?? '?'}
-          </Typography>
-        </Stack>
-      </Alert>
-      <Stack direction="row" gap={1} sx={{ mt: 1 }}>
-        <Button size="small" color="primary" variant="contained" onClick={() => void send()}>Confirm and send</Button>
-        <Button size="small" onClick={() => { intent.current = null; setPhase(IDLE) }}>Cancel</Button>
-      </Stack>
-    </>}
-
-    {(phase.kind === 'submitted' || phase.kind === 'confirmed' || phase.kind === 'reverted' || phase.kind === 'failed') && <>
-      <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
-        <Chip
-          size="small"
-          color={phase.kind === 'confirmed' ? 'success' : phase.kind === 'reverted' || phase.kind === 'failed' ? 'error' : 'default'}
-          label={describePhase(phase) || 'Failed'}
-        />
-        {phase.txHash !== '' && <Typography variant="caption" component="code" sx={{ overflowWrap: 'anywhere' }}>{phase.txHash}</Typography>}
-        {phase.kind === 'confirmed' && <Typography variant="caption" color="text.secondary">block {phase.blockNumber}</Typography>}
-      </Stack>
-      {phase.kind === 'failed' && <Alert severity="error" sx={{ mt: 1 }}>{phase.message}</Alert>}
-      {(phase.kind === 'reverted' || phase.kind === 'failed') && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-          Not retried automatically — run it again explicitly if intended.
-        </Typography>
-      )}
-    </>}
+    {executeLocation === 'strip' && <ExecuteBlocks execution={execution} />}
   </Paper>;
 }

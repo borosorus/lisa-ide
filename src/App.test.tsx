@@ -40,7 +40,7 @@ vi.mock('./editor/SourceEditor', () => ({
 // The panel's own behaviour is its suite's business. Here only the handoff matters:
 // what App is willing to treat as an executable current program (§4).
 vi.mock('./wallet/WalletExecutionPanel', () => ({
-  WalletExecutionPanel: ({ output }: { output: unknown }) => <div data-testid="wallet-output">{output === null ? 'not executable' : 'executable'}</div>,
+  WalletExecutionPanel: ({ execution }: { execution: { output: unknown } }) => <div data-testid="wallet-output">{execution.output === null ? 'not executable' : 'executable'}</div>,
 }));
 vi.mock('./visual/VisualCanvas', () => ({
   VisualCanvas: (props: Record<string, any>) => <>

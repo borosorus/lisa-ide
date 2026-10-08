@@ -1,14 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
-  Stack, Tab, Tabs, ThemeProvider, ToggleButton, ToggleButtonGroup, Typography,
+  Box, Button, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
+  Stack, Tab, Tabs, ThemeProvider, Typography,
 } from '@mui/material';
-import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
-import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
-import FileUploadRoundedIcon from '@mui/icons-material/FileUploadRounded';
-import CodeRoundedIcon from '@mui/icons-material/CodeRounded';
-import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded';
 import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
@@ -36,18 +31,16 @@ import { occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containm
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import { WalletExecutionPanel } from './wallet/WalletExecutionPanel';
+import { ExecuteActions } from './wallet/ExecuteActions';
+import { useWalletExecution } from './wallet/useWalletExecution';
+import { Toolbar } from './shell/Toolbar';
+import { OutputPanel } from './shell/OutputPanel';
 import { cssVarStyles, theme } from './theme/theme';
 import './styles.css';
 
 function diagnosticFrom(error: unknown): CompileDiagnostic {
   if (error instanceof CompilerError) return error.diagnostic;
   return { message: error instanceof Error ? error.message : String(error) };
-}
-
-function diagnosticLabel(diagnostic: CompileDiagnostic) {
-  return diagnostic.line
-    ? `Line ${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ''}: ${diagnostic.message}`
-    : diagnostic.message;
 }
 
 const DEFAULT_STORED = { version: 1 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
@@ -69,7 +62,6 @@ export default function App() {
   const [importedArtifact, setImportedArtifact] = useState<ProgramArtifact | null>(null);
   const [error, setError] = useState<CompileDiagnostic | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState(0);
   const [notice, setNotice] = useState('');
   const [generated, setGenerated] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -93,6 +85,16 @@ export default function App() {
   useEffect(() => saveStoredProject({ version: 1, mode, codeSource: source, visual: project }), [mode, source, project]);
   // One pure validation pass feeds both the canvas error states and compile.
   const diagnostics = useMemo(() => validateProject(project), [project]);
+
+  /*
+   * Only output the current source compiled to is executable. An imported
+   * artifact populates the same inspectors and the same Output panel, but its
+   * source is not in front of the user, so it never reaches the sender (§4).
+   * The Execute action follows the program: the Output panel while it is
+   * open, the wallet strip only while the visual canvas has it collapsed.
+   */
+  const execution = useWalletExecution(importedArtifact === null ? output : null);
+  const executeLocation: 'strip' | 'output' = mode === 'visual' && !outputOpen ? 'strip' : 'output';
 
   function replaceSource(next: string, nextNotice = '') {
     if (next === source) {
@@ -276,14 +278,11 @@ export default function App() {
     }
   }
 
-  async function copy() {
+  function copy() {
     if (!output) return;
-    try {
-      await navigator.clipboard.writeText(output.program);
-      setNotice('Bytecode copied');
-    } catch {
-      setNotice('Clipboard unavailable in this browser');
-    }
+    void navigator.clipboard.writeText(output.program)
+      .then(() => setNotice('Bytecode copied'))
+      .catch(() => setNotice('Clipboard unavailable in this browser'));
   }
 
   function download() {
@@ -298,61 +297,30 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  const outputPanel = <OutputPanel
+    output={output}
+    error={error}
+    notice={notice}
+    busy={busy}
+    imported={importedArtifact !== null}
+    generated={generated}
+    actions={executeLocation === 'output' ? <ExecuteActions execution={execution} /> : undefined}
+    onCopy={copy}
+    onDownload={download}
+  />;
+
   return <ThemeProvider theme={theme}>
     <CssBaseline />
     <GlobalStyles styles={cssVarStyles} />
     <Box className={mode === 'visual' ? 'app app-fixed' : 'app'}>
-      <Stack className="topbar" direction="row" alignItems="center" justifyContent="space-between" gap={2}>
-        <Stack direction="row" alignItems="center" spacing={1.5}>
-          <Box className="brand-mark" aria-hidden="true"><BoltRoundedIcon fontSize="small" /></Box>
-          <Box>
-            <Typography variant="h5" fontWeight={700}>LISA IDE</Typography>
-            <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
-          </Box>
-        </Stack>
-        <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end" alignItems="center">
-          <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => {
-            if (next && next !== mode) {
-              invalidateOutput();
-              setMode(next);
-            }
-          }} aria-label="Authoring mode">
-            <ToggleButton value="code">
-              <Stack direction="row" alignItems="center" spacing={0.75}>
-                <CodeRoundedIcon fontSize="small" sx={{ mb: -0.2 }} />
-                <span>Code</span>
-              </Stack>
-            </ToggleButton>
-            <ToggleButton value="visual">
-              <Stack direction="row" alignItems="center" spacing={0.75}>
-                <AccountTreeRoundedIcon fontSize="small" sx={{ mb: -0.2 }} />
-                <span>Visual</span>
-              </Stack>
-            </ToggleButton>
-          </ToggleButtonGroup>
-          <Button variant="outlined" component="label" disabled={busy} startIcon={<FileUploadRoundedIcon fontSize="small" />}>
-            Import artifact
-            <input
-              hidden
-              type="file"
-              accept=".json,application/json"
-              onChange={event => {
-                const file = event.target.files?.[0];
-                event.target.value = '';
-                if (file) void importArtifact(file);
-              }}
-            />
-          </Button>
-          <Button variant="contained" onClick={compile} disabled={busy}
-            startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <PlayArrowRoundedIcon fontSize="small" />}>
-            {busy ? 'Working…' : 'Compile'}
-          </Button>
-        </Stack>
-      </Stack>
-      {/* Only output the current source compiled to is executable. An imported
-          artifact populates the same inspectors and the same Output panel, but its
-          source is not in front of the user, so it never reaches the sender (§4). */}
-      <WalletExecutionPanel output={importedArtifact === null ? output : null} />
+      <Toolbar
+        mode={mode}
+        busy={busy}
+        onModeChange={next => { invalidateOutput(); setMode(next); }}
+        onCompile={compile}
+        onImportFile={file => void importArtifact(file)}
+      />
+      <WalletExecutionPanel execution={execution} executeLocation={executeLocation} />
       {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
@@ -388,9 +356,7 @@ export default function App() {
         </Paper>
         <Paper className="pane output-pane" elevation={0}>
           <Box className="pane-heading"><PaneTitle icon={<TerminalRoundedIcon />}>Output</PaneTitle></Box>
-          <Box className="output-content">
-            {renderOutput()}
-          </Box>
+          <Box className="output-content">{outputPanel}</Box>
         </Paper>
       </Box> : <Box className={`visual-workspace${libraryOpen ? '' : ' library-collapsed'}`}>
         <Paper className="pane canvas-pane" elevation={0}>
@@ -477,40 +443,9 @@ export default function App() {
             </Button>
             {!outputOpen && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>{outputSummary()}</Box>}
           </Stack>
-          {outputOpen && <Box className="output-content">{renderOutput()}</Box>}
+          {outputOpen && <Box className="output-content">{outputPanel}</Box>}
         </Paper>
       </Box>}
     </Box>
   </ThemeProvider>;
-
-  function renderOutput() {
-    const showGenerated = generated.length > 0;
-    return <>
-      {error && <Alert severity="error" sx={{ mb: 2, overflowWrap: 'anywhere' }}>{diagnosticLabel(error)}</Alert>}
-      {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
-      {busy && <Typography color="text.secondary">Processing program…</Typography>}
-      {!busy && !output && !error && <Typography color="text.secondary">Compile source or import an artifact to inspect the program.</Typography>}
-      {output && <>
-        <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
-          <Chip label={`${output.byteSize} bytes`} size="small" />
-          <Chip label={`${output.instructionCount} instructions`} size="small" />
-          {importedArtifact && <Chip label="Imported artifact" size="small" variant="outlined" />}
-        </Stack>
-        <Typography variant="caption" color="text.secondary">PROGRAM HASH</Typography>
-        <Box className="hash">{output.programHash}</Box>
-        <Tabs value={showGenerated ? tab : Math.min(tab, 1)} onChange={(_, value: number) => setTab(value)} sx={{ mt: 1 }}>
-          <Tab label="Bytecode" />
-          <Tab label="Disassembly" />
-          {showGenerated && <Tab label="Generated source" />}
-        </Tabs>
-        {(showGenerated ? tab : Math.min(tab, 1)) === 0 && <Box component="pre" className="code-output" aria-label="Compiled bytecode">{output.program}</Box>}
-        {(showGenerated ? tab : Math.min(tab, 1)) === 1 && <Box component="pre" className="code-output" aria-label="Disassembly">{output.disassembly.join('\n')}</Box>}
-        {showGenerated && tab === 2 && <Box component="pre" className="code-output" aria-label="Generated source" title="Read-only: compiled directly from the graph">{generated}</Box>}
-        <Stack direction="row" gap={1} sx={{ mt: 2 }} flexWrap="wrap">
-          <Button variant="outlined" onClick={copy}>Copy bytecode</Button>
-          <Button variant="outlined" onClick={download}>Export artifact</Button>
-        </Stack>
-      </>}
-    </>;
-  }
 }
