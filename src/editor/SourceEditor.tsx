@@ -1,10 +1,33 @@
-import { useEffect, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { EditorView, keymap, placeholder, Decoration, type DecorationSet } from '@codemirror/view';
 import { EditorState, StateEffect, StateField } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, type CompletionContext } from '@codemirror/autocomplete';
 import { basicSetup } from 'codemirror';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
 import type { CompileDiagnostic } from '../compile/types';
+import { tokens } from '../theme/tokens';
+
+/**
+ * `basicSetup` bundles a highlight style tuned for light backgrounds; on the
+ * sunken surface most of its roles fall below AA. This overrides every role
+ * this grammar produces, from tokens (each >=4.5:1 on `surface.sunken`).
+ */
+const syntaxTheme = HighlightStyle.define([
+  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword], color: tokens.syntax.keyword, fontWeight: '600' },
+  { tag: [t.comment], color: tokens.syntax.comment, fontStyle: 'italic' },
+  { tag: [t.string, t.special(t.string)], color: tokens.syntax.string },
+  { tag: [t.number], color: tokens.syntax.number },
+  { tag: [t.bool, t.null], color: tokens.syntax.bool },
+  { tag: [t.typeName, t.className, t.namespace], color: tokens.syntax.type },
+  { tag: [t.propertyName], color: tokens.text.secondary },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: tokens.accent.primary },
+  { tag: [t.variableName, t.definition(t.variableName)], color: tokens.text.primary },
+  { tag: [t.operator, t.punctuation, t.separator, t.bracket], color: tokens.syntax.punctuation },
+  { tag: [t.meta], color: tokens.text.muted },
+  { tag: [t.invalid], color: tokens.status.danger, textDecoration: 'underline wavy' },
+]);
 
 const names = [
   'createProgram', 'encodeCall', 'rawCalldata', 'SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE',
@@ -52,18 +75,34 @@ const diagnosticField = StateField.define<DecorationSet>({
   provide: field => EditorView.decorations.from(field),
 });
 
-export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
+export interface SourceEditorHandle {
+  /** Put the cursor on a 1-based line and center it — how an error becomes a place. */
+  revealLine(line: number): void;
+}
+
+export const SourceEditor = forwardRef<SourceEditorHandle, {
   value: string;
   onChange: (value: string) => void;
   onCompile: () => void;
   diagnostic?: CompileDiagnostic | null;
-}) {
+}>(function SourceEditor({ value, onChange, onCompile, diagnostic }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onCompileRef = useRef(onCompile);
   onChangeRef.current = onChange;
   onCompileRef.current = onCompile;
+
+  useImperativeHandle(ref, () => ({
+    revealLine(line: number) {
+      const editor = view.current;
+      if (!editor) return;
+      const target = Math.min(Math.max(1, Math.trunc(line)), editor.state.doc.lines);
+      const pos = editor.state.doc.line(target).from;
+      editor.dispatch({ selection: { anchor: pos, head: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+      editor.focus();
+    },
+  }), []);
 
   useEffect(() => {
     if (!host.current) return;
@@ -72,6 +111,7 @@ export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
         doc: value,
         extensions: [
           basicSetup,
+          syntaxHighlighting(syntaxTheme, { fallback: true }),
           javascript(),
           autocompletion({ override: [lisaCompletions] }),
           placeholder('Write a LISA program…'),
@@ -81,15 +121,15 @@ export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
           }),
           EditorView.theme({
-            '&': { height: '100%', fontSize: '14px', backgroundColor: '#101827', color: '#edf3fb' },
+            '&': { height: '100%', fontSize: '14px', backgroundColor: tokens.surface.sunken, color: tokens.text.primary },
             '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
-            '.cm-gutters': { backgroundColor: '#152033', color: '#7790ad', border: 'none' },
-            '.cm-activeLine': { backgroundColor: '#1b2940' },
-            '.cm-activeLineGutter': { backgroundColor: '#1b2940' },
-            '.cm-cursor': { borderLeftColor: '#9ccaff' },
-            '.cm-selectionBackground': { backgroundColor: '#344c70 !important' },
-            '.cm-lisa-error-line': { backgroundColor: 'rgba(244, 67, 54, 0.10)' },
-            '.cm-lisa-error-char': { textDecoration: 'underline wavy #ff6b6b', textUnderlineOffset: '3px' },
+            '.cm-gutters': { backgroundColor: tokens.surface.sunken, color: tokens.text.muted, border: 'none' },
+            '.cm-activeLine': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.07)` },
+            '.cm-activeLineGutter': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.07)` },
+            '.cm-cursor': { borderLeftColor: tokens.accent.primary },
+            '.cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.28) !important` },
+            '.cm-lisa-error-line': { backgroundColor: `rgba(${tokens.status.dangerRgb}, 0.12)` },
+            '.cm-lisa-error-char': { textDecoration: `underline wavy ${tokens.status.danger}`, textUnderlineOffset: '3px' },
           }),
         ],
       }),
@@ -111,4 +151,4 @@ export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
   }, [diagnostic]);
 
   return <div ref={host} aria-label="LISA source editor" className="editor" />;
-}
+});

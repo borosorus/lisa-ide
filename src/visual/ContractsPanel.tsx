@@ -3,6 +3,9 @@ import {
   Alert, Box, Button, Collapse, Dialog, DialogActions, DialogContent, DialogTitle,
   IconButton, Paper, Stack, TextField, Typography,
 } from '@mui/material';
+import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
+import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { isValidAddress, parseAbiJson } from './abi';
 import { isReadFunction, type ContractFunction, type ContractResource } from './model';
 
@@ -34,8 +37,8 @@ export function ContractsPanel({ contracts, onAddContract, onUpdateContract, onR
   }
 
   return <Box>
-    <Button size="small" variant="outlined" onClick={() => setDialogOpen(true)} fullWidth>
-      + Add contract
+    <Button size="small" variant="outlined" onClick={() => setDialogOpen(true)} fullWidth startIcon={<AddRoundedIcon fontSize="small" />}>
+      Add contract
     </Button>
     {contracts.length === 0 && (
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
@@ -72,7 +75,8 @@ function ContractRow({ contract, expanded, onToggle, onPatch, onRemove, onAddFun
   return <Box sx={{ mt: 1 }}>
     <Stack direction="row" alignItems="center" spacing={0.5}>
       <IconButton size="small" onClick={onToggle} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${contract.name}`} sx={{ p: 0.25 }}>
-        <Typography variant="caption" sx={{ transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform .15s' }}>▾</Typography>
+        <ExpandMoreRoundedIcon fontSize="small"
+          sx={{ transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform .15s' }} />
       </IconButton>
       <Typography
         variant="body2" sx={{ flexGrow: 1, cursor: 'pointer', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
@@ -84,7 +88,7 @@ function ContractRow({ contract, expanded, onToggle, onPatch, onRemove, onAddFun
         </Typography>
       </Typography>
       <IconButton size="small" aria-label={`Remove ${contract.name}`} onClick={() => onRemove(contract.id)} sx={{ p: 0.25 }}>
-        <Typography variant="caption" color="text.secondary">✕</Typography>
+        <CloseRoundedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
       </IconButton>
     </Stack>
     <Collapse in={expanded} unmountOnExit>

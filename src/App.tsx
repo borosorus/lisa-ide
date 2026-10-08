@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Chip, CircularProgress, CssBaseline, IconButton, MenuItem, Paper, Select,
-  Stack, Tab, Tabs, ThemeProvider, ToggleButton, ToggleButtonGroup, Typography, createTheme,
+  Box, Button, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
+  Snackbar, Stack, Tab, Tabs, ThemeProvider, Typography,
 } from '@mui/material';
-import { SourceEditor } from './editor/SourceEditor';
+import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
+import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
+import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
+import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
+import TerminalRoundedIcon from '@mui/icons-material/TerminalRounded';
+import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
+import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
+import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded';
+import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
+import { SourceEditor, type SourceEditorHandle } from './editor/SourceEditor';
 import { SOURCE_EXAMPLES, STARTER_SOURCE } from './editor/examples';
 import { CompilerClient, CompilerError } from './compile/client';
 import { createArtifact, parseArtifact, type ProgramArtifact } from './compile/artifact';
@@ -22,26 +31,28 @@ import { occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containm
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import { WalletExecutionPanel } from './wallet/WalletExecutionPanel';
+import { ExecuteBlocks, ExecuteButton } from './wallet/ExecuteActions';
+import { ExecutionDialog } from './wallet/ExecutionDialog';
+import { useWalletExecution } from './wallet/useWalletExecution';
+import { Toolbar } from './shell/Toolbar';
+import { OutputPanel } from './shell/OutputPanel';
+import { cssVarStyles, theme } from './theme/theme';
 import './styles.css';
-
-const theme = createTheme({
-  palette: { mode: 'dark', primary: { main: '#8ebdff' }, background: { default: '#0b1220', paper: '#172236' } },
-  typography: { fontFamily: 'Inter, system-ui, sans-serif' },
-  shape: { borderRadius: 10 },
-});
 
 function diagnosticFrom(error: unknown): CompileDiagnostic {
   if (error instanceof CompilerError) return error.diagnostic;
   return { message: error instanceof Error ? error.message : String(error) };
 }
 
-function diagnosticLabel(diagnostic: CompileDiagnostic) {
-  return diagnostic.line
-    ? `Line ${diagnostic.line}${diagnostic.column ? `:${diagnostic.column}` : ''}: ${diagnostic.message}`
-    : diagnostic.message;
-}
-
 const DEFAULT_STORED = { version: 1 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
+
+/** Pane heading: a quiet icon carrying the eye to what the pane is for. */
+function PaneTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+    <Box aria-hidden="true" sx={{ display: 'flex', color: 'text.secondary', '& svg': { fontSize: 18 } }}>{icon}</Box>
+    <Typography variant="subtitle2" noWrap>{children}</Typography>
+  </Stack>;
+}
 
 export default function App() {
   const stored = useRef(loadStoredProject() ?? DEFAULT_STORED).current;
@@ -52,7 +63,6 @@ export default function App() {
   const [importedArtifact, setImportedArtifact] = useState<ProgramArtifact | null>(null);
   const [error, setError] = useState<CompileDiagnostic | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState(0);
   const [notice, setNotice] = useState('');
   const [generated, setGenerated] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -63,6 +73,11 @@ export default function App() {
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [libraryTab, setLibraryTab] = useState(0);
   const [libraryOpen, setLibraryOpen] = useState(true);
+  // One-deep, single-slot undo for graph deletions: a hand-built graph can lose
+  // minutes of wiring to one Delete keypress, and that keystroke is silent.
+  const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string } | null>(null);
+  // Lets a deletion's own editVisual pass through without voiding the slot it just filled.
+  const keepUndoSlot = useRef(false);
   // Visual mode gives the canvas the space: Output starts collapsed there.
   const [outputOpen, setOutputOpen] = useState(stored.mode !== 'visual');
   useEffect(() => { setOutputOpen(mode !== 'visual'); }, [mode]);
@@ -70,26 +85,47 @@ export default function App() {
   useEffect(() => { if (error) setOutputOpen(true); }, [error]);
   const client = useRef<CompilerClient | null>(null);
   const canvasApi = useRef<CanvasApi | null>(null);
+  const editorRef = useRef<SourceEditorHandle | null>(null);
   const revision = useRef(0);
 
-  useEffect(() => () => client.current?.cancel(), []);
+  useEffect(() => () => client.current?.dispose(), []);
   useEffect(() => saveStoredProject({ version: 1, mode, codeSource: source, visual: project }), [mode, source, project]);
   // One pure validation pass feeds both the canvas error states and compile.
   const diagnostics = useMemo(() => validateProject(project), [project]);
 
+  /*
+   * Only output the current source compiled to is executable. An imported
+   * artifact populates the same inspectors and the same Output panel, but its
+   * source is not in front of the user, so it never reaches the sender (§4).
+   * The Execute action follows the program into the Output pane's own header
+   * — expanded or collapsed, code or visual — so the action is never behind
+   * a toggle; what the user verifies before a broadcast is a centered window.
+   */
+  const execution = useWalletExecution(importedArtifact === null ? output : null);
+  // Mounted in exactly one header at a time: the mode branch and the collapse
+  // state decide, and both cannot show simultaneously.
+  const executeSlot = <ExecuteButton execution={execution} />;
+
   function replaceSource(next: string, nextNotice = '') {
     if (next === source) {
-      setNotice(nextNotice);
+      if (nextNotice !== '') setNotice(nextNotice);
       return;
     }
     invalidateOutput();
     setSource(next);
-    setNotice(nextNotice);
+    // An empty notice means "keep whatever explanation is showing"; an
+    // explicit one (a loaded example) replaces it.
+    if (nextNotice !== '') setNotice(nextNotice);
   }
 
   function invalidateOutput() {
     revision.current++;
     client.current?.cancel();
+    // A visible result that vanishes because its input moved should say so;
+    // silently reverting to "idle" reads as a glitch.
+    if (output !== null || importedArtifact !== null) {
+      setNotice('Previous output cleared — the source or graph behind it changed.');
+    }
     setOutput(null);
     setImportedArtifact(null);
     setError(null);
@@ -100,6 +136,10 @@ export default function App() {
   /** Semantic graph edits invalidate compiled output; position edits do not. */
   function editVisual(transform: VisualProject | ((prev: VisualProject) => VisualProject), positional = false) {
     if (!positional) invalidateOutput();
+    // Any graph edit other than a deletion voids that deletion's undo slot:
+    // restoring the snapshot would silently discard the later work.
+    if (keepUndoSlot.current) keepUndoSlot.current = false;
+    else setUndo(null);
     setProject(prev => typeof transform === 'function' ? transform(prev) : transform);
   }
 
@@ -178,6 +218,30 @@ export default function App() {
     editVisual(p => placeNode(p, { id, kind: 'call', contractId, signature }));
   }
 
+  /** Restore the deleted graph; any compiled output was already invalidated. */
+  function undoDelete() {
+    const snapshot = undo?.snapshot;
+    setUndo(null);
+    if (snapshot) editVisual(snapshot);
+  }
+
+  function deleteNodes(ids: string[]) {
+    if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+    if (selectedBranch && ids.includes(selectedBranch.nodeId)) setSelectedBranch(null);
+    const edgesLost = project.edges.filter(e => ids.includes(e.from.node) || ids.includes(e.to.node)).length;
+    const message = `Removed ${ids.length} node${ids.length === 1 ? '' : 's'}${edgesLost > 0 ? ` and ${edgesLost} edge${edgesLost === 1 ? '' : 's'}` : ''}`;
+    keepUndoSlot.current = true;
+    editVisual(p => removeNodes(p, ids));
+    setUndo({ snapshot: project, message });
+  }
+
+  function deleteEdges(ids: string[]) {
+    if (selectedEdgeId && ids.includes(selectedEdgeId)) setSelectedEdgeId(null);
+    keepUndoSlot.current = true;
+    editVisual(p => ids.reduce(removeEdge, p));
+    setUndo({ snapshot: project, message: `Removed ${ids.length} edge${ids.length === 1 ? '' : 's'}` });
+  }
+
   async function compile() {
     const currentRevision = revision.current;
     const compiler = client.current ?? new CompilerClient();
@@ -222,12 +286,15 @@ export default function App() {
     return cause instanceof Error ? cause.message : String(cause);
   }
 
-  /** One-line state shown on the collapsed output bar. */
+  /** Compact state shown on the collapsed output bar. */
   function outputSummary() {
-    if (error) return '⚠ failed';
-    if (busy) return 'compiling…';
-    if (output) return `✓ compiled · ${output.byteSize} bytes`;
-    return 'idle';
+    if (error) return <><WarningRoundedIcon fontSize="small" sx={{ color: 'error.main', fontSize: 18 }} />
+      <Typography variant="caption" color="text.secondary">failed</Typography></>;
+    if (busy) return <><CircularProgress size={12} />
+      <Typography variant="caption" color="text.secondary">compiling…</Typography></>;
+    if (output) return <><CheckCircleOutlineRoundedIcon fontSize="small" sx={{ color: 'success.main', fontSize: 18 }} />
+      <Typography variant="caption" color="text.secondary">compiled · {output.byteSize} bytes</Typography></>;
+    return <Typography variant="caption" color="text.secondary">idle</Typography>;
   }
 
   async function importArtifact(file: File) {
@@ -256,14 +323,11 @@ export default function App() {
     }
   }
 
-  async function copy() {
+  function copy() {
     if (!output) return;
-    try {
-      await navigator.clipboard.writeText(output.program);
-      setNotice('Bytecode copied');
-    } catch {
-      setNotice('Clipboard unavailable in this browser');
-    }
+    void navigator.clipboard.writeText(output.program)
+      .then(() => setNotice('Bytecode copied'))
+      .catch(() => setNotice('Clipboard unavailable in this browser'));
   }
 
   function download() {
@@ -278,50 +342,35 @@ export default function App() {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  const outputPanel = <OutputPanel
+    output={output}
+    error={error}
+    notice={notice}
+    busy={busy}
+    imported={importedArtifact !== null}
+    generated={generated}
+    actions={<ExecuteBlocks execution={execution} />}
+    onCopy={copy}
+    onDownload={download}
+    onErrorReveal={line => editorRef.current?.revealLine(line)}
+  />;
+
   return <ThemeProvider theme={theme}>
     <CssBaseline />
+    <GlobalStyles styles={cssVarStyles} />
     <Box className={mode === 'visual' ? 'app app-fixed' : 'app'}>
-      <Stack className="topbar" direction="row" alignItems="center" justifyContent="space-between" gap={2}>
-        <Box>
-          <Typography variant="h5" fontWeight={700}>LISA IDE</Typography>
-          <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
-        </Box>
-        <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end" alignItems="center">
-          <ToggleButtonGroup size="small" exclusive value={mode} onChange={(_, next: 'code' | 'visual' | null) => {
-            if (next && next !== mode) {
-              invalidateOutput();
-              setMode(next);
-            }
-          }} aria-label="Authoring mode">
-            <ToggleButton value="code">Code</ToggleButton>
-            <ToggleButton value="visual">Visual</ToggleButton>
-          </ToggleButtonGroup>
-          <Button variant="outlined" component="label" disabled={busy}>
-            Import artifact
-            <input
-              hidden
-              type="file"
-              accept=".json,application/json"
-              onChange={event => {
-                const file = event.target.files?.[0];
-                event.target.value = '';
-                if (file) void importArtifact(file);
-              }}
-            />
-          </Button>
-          <Button variant="contained" onClick={compile} disabled={busy} startIcon={busy ? <CircularProgress size={16} /> : undefined}>
-            {busy ? 'Working…' : 'Compile'}
-          </Button>
-        </Stack>
-      </Stack>
-      {/* Only output the current source compiled to is executable. An imported
-          artifact populates the same inspectors and the same Output panel, but its
-          source is not in front of the user, so it never reaches the sender (§4). */}
-      <WalletExecutionPanel output={importedArtifact === null ? output : null} />
+      <Toolbar
+        mode={mode}
+        busy={busy}
+        onModeChange={next => { invalidateOutput(); setMode(next); }}
+        onCompile={compile}
+        onImportFile={file => void importArtifact(file)}
+      />
+      <WalletExecutionPanel execution={execution} />
       {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-            <Typography variant="subtitle2">Source</Typography>
+            <PaneTitle icon={<DescriptionRoundedIcon />}>Source</PaneTitle>
             <Stack direction="row" alignItems="center" gap={1}>
               <Select
                 size="small"
@@ -339,10 +388,13 @@ export default function App() {
                   <MenuItem key={example.id} value={example.id}>{example.label}</MenuItem>
                 ))}
               </Select>
-              <Typography variant="caption" color="text.secondary">⌘ / Ctrl + Enter</Typography>
+              <Typography variant="caption" component="span" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                Compile with <kbd>Ctrl/⌘ + Enter</kbd>
+              </Typography>
             </Stack>
           </Stack>
           <SourceEditor
+            ref={editorRef}
             value={source}
             onChange={next => replaceSource(next)}
             onCompile={compile}
@@ -350,28 +402,22 @@ export default function App() {
           />
         </Paper>
         <Paper className="pane output-pane" elevation={0}>
-          <Box className="pane-heading"><Typography variant="subtitle2">Output</Typography></Box>
-          <Box className="output-content">
-            {renderOutput()}
-          </Box>
+          <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+            <PaneTitle icon={<TerminalRoundedIcon />}>Output</PaneTitle>
+            {executeSlot}
+          </Stack>
+          <Box className="output-content">{outputPanel}</Box>
         </Paper>
       </Box> : <Box className={`visual-workspace${libraryOpen ? '' : ' library-collapsed'}`}>
         <Paper className="pane canvas-pane" elevation={0}>
-          <Box className="pane-heading"><Typography variant="subtitle2">Canvas</Typography></Box>
+          <Box className="pane-heading"><PaneTitle icon={<DashboardRoundedIcon />}>Canvas</PaneTitle></Box>
           <VisualCanvas
             canvasApi={canvasApi}
             project={project}
             onMoveNodes={moveNodes}
             onAddCallNode={addCallNode}
-            onDeleteNodes={ids => {
-              if (selectedId && ids.includes(selectedId)) setSelectedId(null);
-              if (selectedBranch && ids.includes(selectedBranch.nodeId)) setSelectedBranch(null);
-              editVisual(p => removeNodes(p, ids));
-            }}
-            onDeleteEdges={ids => {
-              if (selectedEdgeId && ids.includes(selectedEdgeId)) setSelectedEdgeId(null);
-              editVisual(p => ids.reduce(removeEdge, p));
-            }}
+            onDeleteNodes={deleteNodes}
+            onDeleteEdges={deleteEdges}
             onConnect={(from, to) => editVisual(p => connectPort(p, { from, to }))}
             onPatchNode={(id, fields) => editVisual(p => updateNode(p, id, fields))}
             onResizeIf={(id, size) => editVisual(p => setNodeFrameSize(p, id, size), true)}
@@ -392,10 +438,12 @@ export default function App() {
         </Paper>
         <Paper className="pane side-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-            {libraryOpen && <Typography variant="subtitle2">Library</Typography>}
+            {libraryOpen && <PaneTitle icon={<LibraryBooksRoundedIcon />}>Library</PaneTitle>}
             <IconButton size="small" aria-label={libraryOpen ? 'Collapse library' : 'Expand library'}
               onClick={() => setLibraryOpen(open => !open)} sx={{ p: 0.5 }}>
-              <Typography variant="body2">{libraryOpen ? '⟩' : '⟨'}</Typography>
+              {libraryOpen
+                ? <ChevronRightRoundedIcon fontSize="small" />
+                : <ChevronLeftRoundedIcon fontSize="small" />}
             </IconButton>
           </Stack>
           {libraryOpen && <>
@@ -430,45 +478,31 @@ export default function App() {
         <Paper className={`pane output-pane${outputOpen ? '' : ' output-collapsed'}`} elevation={0}>
           <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
             <Button size="small" onClick={() => setOutputOpen(open => !open)} aria-expanded={outputOpen}
-              sx={{ justifyContent: 'flex-start', minWidth: 0 }}>
-              {outputOpen ? '▾ Output' : '▸ Output'}
+              startIcon={outputOpen
+                ? <ExpandMoreRoundedIcon fontSize="small" />
+                : <ChevronRightRoundedIcon fontSize="small" />}
+              sx={{ justifyContent: 'flex-start', minWidth: 0, px: 0.5 }}>
+              Output
             </Button>
-            {!outputOpen && <Typography variant="caption" color="text.secondary">{outputSummary()}</Typography>}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {!outputOpen && outputSummary()}
+              {executeSlot}
+            </Box>
           </Stack>
-          {outputOpen && <Box className="output-content">{renderOutput()}</Box>}
+          {/* Collapsed, this bar is the program's whole visible surface — so a
+              dismissed transaction's receipt lives here too, until it is empty. */}
+          {!outputOpen && <Box sx={{ px: 1.5, pb: 1 }}><ExecuteBlocks execution={execution} /></Box>}
+          {outputOpen && <Box className="output-content">{outputPanel}</Box>}
         </Paper>
       </Box>}
+      <ExecutionDialog execution={execution} />
+      <Snackbar
+        open={undo !== null}
+        autoHideDuration={7000}
+        onClose={() => setUndo(null)}
+        message={undo?.message ?? ''}
+        action={<Button size="small" color="inherit" onClick={undoDelete}>Undo</Button>}
+      />
     </Box>
   </ThemeProvider>;
-
-  function renderOutput() {
-    const showGenerated = generated.length > 0;
-    return <>
-      {error && <Alert severity="error" sx={{ mb: 2, overflowWrap: 'anywhere' }}>{diagnosticLabel(error)}</Alert>}
-      {notice && <Alert severity="info" sx={{ mb: 2 }}>{notice}</Alert>}
-      {busy && <Typography color="text.secondary">Processing program…</Typography>}
-      {!busy && !output && !error && <Typography color="text.secondary">Compile source or import an artifact to inspect the program.</Typography>}
-      {output && <>
-        <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
-          <Chip label={`${output.byteSize} bytes`} size="small" />
-          <Chip label={`${output.instructionCount} instructions`} size="small" />
-          {importedArtifact && <Chip label="Imported artifact" size="small" variant="outlined" />}
-        </Stack>
-        <Typography variant="caption" color="text.secondary">PROGRAM HASH</Typography>
-        <Box className="hash">{output.programHash}</Box>
-        <Tabs value={showGenerated ? tab : Math.min(tab, 1)} onChange={(_, value: number) => setTab(value)} sx={{ mt: 1 }}>
-          <Tab label="Bytecode" />
-          <Tab label="Disassembly" />
-          {showGenerated && <Tab label="Generated source" />}
-        </Tabs>
-        {(showGenerated ? tab : Math.min(tab, 1)) === 0 && <Box component="pre" className="code-output" aria-label="Compiled bytecode">{output.program}</Box>}
-        {(showGenerated ? tab : Math.min(tab, 1)) === 1 && <Box component="pre" className="code-output" aria-label="Disassembly">{output.disassembly.join('\n')}</Box>}
-        {showGenerated && tab === 2 && <Box component="pre" className="code-output" aria-label="Generated source" title="Read-only: compiled directly from the graph">{generated}</Box>}
-        <Stack direction="row" gap={1} sx={{ mt: 2 }} flexWrap="wrap">
-          <Button variant="outlined" onClick={copy}>Copy bytecode</Button>
-          <Button variant="outlined" onClick={download}>Export artifact</Button>
-        </Stack>
-      </>}
-    </>;
-  }
 }

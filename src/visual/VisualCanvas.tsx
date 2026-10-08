@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
 import {
-  Background, Controls, ReactFlow, ReactFlowProvider, useReactFlow,
+  Background, Controls, Panel, ReactFlow, ReactFlowProvider, useReactFlow,
   type Connection, type Edge, type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -8,6 +8,7 @@ import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flo
 import { canConnect } from './ports';
 import { absolutePosition, iframes, normalizeDrag } from './containment';
 import { indexDiagnostics, type GraphDiagnostic } from './validate';
+import { tokens } from '../theme/tokens';
 import type { GraphNode, IfFrameSize, ScopeTarget, Vec2, VisualProject } from './model';
 import { FUNCTION_MIME } from './ContractsPanel';
 
@@ -269,8 +270,13 @@ function Canvas({
         onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
         onPaneClick={() => { onSelectNode(null); onSelectEdge(null); }}
       >
-        <Background color="#26354c" gap={24} />
+        <Background color={tokens.border.strong} gap={24} />
         <Controls showInteractive={false} />
+        {project.nodes.length === 0 && (
+          <Panel position="top-center">
+            <div className="canvas-empty-hint">Drag a contract function here, or click one in the library.</div>
+          </Panel>
+        )}
       </ReactFlow>
     </NodeEditContext.Provider>
   </div>;

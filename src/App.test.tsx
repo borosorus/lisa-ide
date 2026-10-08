@@ -25,6 +25,7 @@ vi.mock('./compile/client', () => {
       compile = compileMock;
       inspect = inspectMock;
       cancel = cancelMock;
+      dispose = cancelMock;
     },
   };
 });
@@ -40,7 +41,7 @@ vi.mock('./editor/SourceEditor', () => ({
 // The panel's own behaviour is its suite's business. Here only the handoff matters:
 // what App is willing to treat as an executable current program (§4).
 vi.mock('./wallet/WalletExecutionPanel', () => ({
-  WalletExecutionPanel: ({ output }: { output: unknown }) => <div data-testid="wallet-output">{output === null ? 'not executable' : 'executable'}</div>,
+  WalletExecutionPanel: ({ execution }: { execution: { output: unknown } }) => <div data-testid="wallet-output">{execution.output === null ? 'not executable' : 'executable'}</div>,
 }));
 vi.mock('./visual/VisualCanvas', () => ({
   VisualCanvas: (props: Record<string, any>) => <>
@@ -118,7 +119,7 @@ describe('App', () => {
 
   /** Add a contract through the dialog and wait for its collapsed row. */
   async function addContract(name = 'USDC', abi = BALANCE_ABI, address = ADDRESS) {
-    fireEvent.click(screen.getByRole('button', { name: '+ Add contract' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } });
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: address } });
     fireEvent.change(screen.getByLabelText('ABI JSON'), { target: { value: abi } });
@@ -147,6 +148,8 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     expect(await screen.findByText('Line 2:5: Unknown name: NOPE')).toBeInTheDocument();
     expect(screen.getByTestId('editor-diagnostic')).toHaveTextContent('2:5');
+    // A line-carrying error offers the way back to the line.
+    fireEvent.click(screen.getByRole('button', { name: 'Go to line' }));
   });
 
   it('copies bytecode and exports a JSON artifact', async () => {
@@ -179,6 +182,15 @@ describe('App', () => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       expect(saved.codeSource).toBe('changed');
     });
+  });
+
+  it('explains why a previous result disappeared when its input changed', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    fireEvent.change(screen.getByLabelText('LISA source editor'), { target: { value: 'changed' } });
+    expect(await screen.findByText('Previous output cleared — the source or graph behind it changed.')).toBeInTheDocument();
   });
 
   // §4: an artifact is a thing to look at, not a thing to run. The panel is mocked
@@ -268,7 +280,7 @@ describe('App', () => {
   it('keeps the add-contract dialog contained and rejects an invalid address', async () => {
     render(<App />);
     toVisual();
-    fireEvent.click(screen.getByRole('button', { name: '+ Add contract' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add contract' }));
     // The form only exists inside the dialog, not permanently in the panel.
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Bad' } });
     fireEvent.change(screen.getByLabelText('Address'), { target: { value: '0x123' } });
@@ -420,14 +432,47 @@ describe('App', () => {
     });
   });
 
+  it('restores a deleted node and its edges from the undo action', async () => {
+    render(<App />);
+    toVisual();
+    await addContract();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
+    await waitFor(() => expect((JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.edges)).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-delete-first' }));
+    await screen.findByText(/Removed 1 node and 1 edge/);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual;
+      expect(saved.nodes).toHaveLength(2);
+      expect(saved.edges).toHaveLength(1);
+    });
+  });
+
+  it('voids the undo slot when the graph is edited again after a deletion', async () => {
+    render(<App />);
+    toVisual();
+    await addContract();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-delete-first' }));
+    await screen.findByText(/Removed 1 node/);
+    // A later edit means a wholesale snapshot restore would discard it — so undo goes.
+    fireEvent.click(screen.getByRole('button', { name: 'Context' }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.nodes).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument());
+  });
+
   it('collapses the library to widen the canvas', async () => {
     render(<App />);
     toVisual();
-    expect(screen.getByRole('button', { name: '+ Add contract' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add contract' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Collapse library' }));
-    expect(screen.queryByRole('button', { name: '+ Add contract' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add contract' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Expand library' }));
-    expect(screen.getByRole('button', { name: '+ Add contract' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add contract' })).toBeInTheDocument();
   });
 
   it('connects ports through the canvas', async () => {
@@ -470,9 +515,22 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /Output/, expanded: false })).toBeInTheDocument();
     expect(screen.getByText('idle')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
-    await waitFor(() => expect(screen.getByText('✓ compiled · 1 bytes')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('compiled · 1 bytes')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Output/ }));
     expect(await screen.findByLabelText('Compiled bytecode')).toBeInTheDocument();
+  });
+
+  it('keeps the Execute action on the collapsed output bar, never behind the toggle', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    toVisual();
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await waitFor(() => expect(screen.getByText('compiled · 1 bytes')).toBeInTheDocument());
+    // The bar stays collapsed and the action stays on it — disabled here only
+    // because no wallet is connected; never merely because the pane is shut.
+    expect(screen.getByRole('button', { name: 'Execute program' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
+    expect(screen.getByRole('button', { name: 'Execute program' })).toBeInTheDocument();
   });
 
   it('invalidates compiled output when switching authoring modes', async () => {

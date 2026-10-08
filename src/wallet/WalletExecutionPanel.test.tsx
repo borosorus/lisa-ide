@@ -7,6 +7,9 @@ import { lisaAccountInterface } from '../lisa-account/abi';
 import type { AccountReader, DeploymentConfig } from '../lisa-account/types';
 import type { CompileOutput } from '../compile/types';
 import { WalletExecutionPanel } from './WalletExecutionPanel';
+import { ExecuteActions } from './ExecuteActions';
+import { ExecutionDialog } from './ExecutionDialog';
+import { useWalletExecution } from './useWalletExecution';
 import { WalletSessionContext, DISCONNECTED_SESSION, type WalletSession } from './session';
 
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
@@ -91,11 +94,24 @@ function fake(options: Options = {}): Fake {
   return { session, reader, sendTransaction, live };
 }
 
+/** The composition App owns: strip, Output-side action, and the execution window, under a fake session. */
+function Harness({ output, config }: {
+  output: CompileOutput | null;
+  config: DeploymentConfig;
+}) {
+  const execution = useWalletExecution(output, config);
+  return <>
+    <WalletExecutionPanel execution={execution} />
+    <ExecuteActions execution={execution} />
+    <ExecutionDialog execution={execution} />
+  </>;
+}
+
 function panel(session: WalletSession, over: { output?: CompileOutput | null; config?: DeploymentConfig } = {}) {
   // `null` must stay null: it means "no current compiled program" (§6).
   const output: CompileOutput | null = 'output' in over ? (over.output as CompileOutput | null) : OUTPUT;
   return <WalletSessionContext.Provider value={session}>
-    <WalletExecutionPanel output={output} config={over.config ?? CONFIGURED} />
+    <Harness output={output} config={over.config ?? CONFIGURED} />
   </WalletSessionContext.Provider>;
 }
 
@@ -204,7 +220,7 @@ describe('WalletExecutionPanel', () => {
     const { sendTransaction } = await readyToExecute();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(sendTransaction).not.toHaveBeenCalled();
-    expect(execute()).toBeEnabled();
+    await waitFor(() => expect(execute()).toBeEnabled());
   });
 
   it('shows a reverted receipt and never retries it (§8)', async () => {
@@ -275,7 +291,7 @@ describe('WalletExecutionPanel', () => {
     // assertion cannot pass by racing a fresh inspection to completion.
     rerender(panel(fake({ account: OTHER_ACCOUNT, code: () => new Promise<string>(() => {}) }).session));
     await statusIs('Inspecting account…');
-    expect(execute()).toBeDisabled();
+    await waitFor(() => expect(execute()).toBeDisabled());
     expect(first.sendTransaction).not.toHaveBeenCalled();
   });
 
@@ -302,6 +318,20 @@ describe('WalletExecutionPanel', () => {
     expect(switchChain).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Switch network' }));
     await waitFor(() => expect(switchChain).toHaveBeenCalledWith(CHAIN));
+  });
+
+  it('keeps the gate explanation in the strip whatever else the layout does', async () => {
+    const switchChain = vi.fn(async () => {});
+    const f = fake({ chainId: '11155111', switchChain });
+    render(panel(f.session));
+    await statusIs(/wrong network/i);
+    // The strip owns the status story even though the action lives elsewhere.
+    expect(screen.getByRole('status')).toHaveTextContent(/chain 11155111/);
+    fireEvent.click(screen.getByRole('button', { name: 'Switch network' }));
+    await waitFor(() => expect(switchChain).toHaveBeenCalledWith(CHAIN));
+    // The action sits with the program, disabled while the gate refuses (§2).
+    expect(execute()).toBeDisabled();
+    expect(f.reader.getCode).not.toHaveBeenCalled();
   });
 
   it('reports a runtime address that has no code, and never calls it ready (§3)', async () => {
@@ -408,8 +438,9 @@ describe('WalletExecutionPanel', () => {
     fireEvent.click(execute());
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
     await screen.findByText('Confirmed');
-    // The action returns rather than the panel dead-ending, and a second run is
-    // still an explicit choice, never an automatic retry (§8).
+    // Closing the window returns the action to the surface it lives on; a
+    // second run remains an explicit choice, never an automatic retry (§8).
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Execute program' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
     await waitFor(() => expect(f.sendTransaction).toHaveBeenCalledTimes(2));
@@ -419,7 +450,7 @@ describe('WalletExecutionPanel', () => {
     const f = fake();
     render(<StrictMode>
       <WalletSessionContext.Provider value={f.session}>
-        <WalletExecutionPanel output={OUTPUT} config={CONFIGURED} />
+        <Harness output={OUTPUT} config={CONFIGURED} />
       </WalletSessionContext.Provider>
     </StrictMode>);
     await statusIs('Ready');
@@ -435,6 +466,122 @@ describe('WalletExecutionPanel', () => {
     await screen.findByText('Confirmed');
     rerender(panel(fake({ account: OTHER_ACCOUNT, code: () => new Promise<string>(() => {}) }).session));
     await statusIs('Inspecting account…');
-    expect(screen.queryByText('Confirmed')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Confirmed')).not.toBeInTheDocument());
+  });
+
+  it('brings up one centered review window that sends nothing by itself', async () => {
+    const { sendTransaction } = await readyToExecute();
+    expect(screen.getByRole('dialog', { name: /Execute program/i })).toBeInTheDocument();
+    // What gets verified is exactly what would go out (§14).
+    expect(screen.getByText(ACCOUNT)).toBeInTheDocument();
+    expect(screen.getByText(OUTPUT.programHash)).toBeInTheDocument();
+    expect(screen.getByText(/value 0 wei/i)).toBeInTheDocument();
+    expect(sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it('abandons the review silently when Escape closes it', async () => {
+    const { sendTransaction } = await readyToExecute();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(sendTransaction).not.toHaveBeenCalled();
+    await waitFor(() => expect(execute()).toBeEnabled());
+  });
+
+  it('sends once to a double click on Confirm', async () => {
+    const { sendTransaction } = await readyToExecute();
+    const confirm = screen.getByRole('button', { name: 'Confirm and send' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await screen.findByText('Confirmed');
+    expect(sendTransaction).toHaveBeenCalledOnce();
+  });
+
+  it('holds the window shut while the wallet holds the transaction', async () => {
+    let releaseSend!: (sent: { hash: string; wait: () => Promise<{ status: number; blockNumber: number } | null> }) => void;
+    const f = fake({ send: () => new Promise(resolve => { releaseSend = resolve }) });
+    render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await waitFor(() => expect(f.sendTransaction).toHaveBeenCalledOnce());
+    // Awaiting is not the user's way out: closing here would strand the one
+    // moment where a broadcast could still be seen coming.
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+    releaseSend({ hash: `0x${'ce'.repeat(32)}`, wait: async () => ({ status: 1, blockNumber: 42 }) });
+    await screen.findByRole('button', { name: 'Close' });
+  });
+
+  it('hands the receipt to the inline surface when the window is dismissed mid-flight', async () => {
+    const hash = `0x${'ce'.repeat(32)}`;
+    let releaseWait!: (receipt: { status: number; blockNumber: number }) => void;
+    const f = fake({ send: async () => ({ hash, wait: () => new Promise(resolve => { releaseWait = resolve }) }) });
+    render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    // Submitted: dismissing is allowed, and tracking does not stop (§8).
+    await screen.findByRole('button', { name: 'Close' });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // The receipt changed homes, not existence — and it is in exactly one.
+    expect(screen.getAllByText('Submitted')).toHaveLength(1);
+    expect(screen.getByText(hash)).toBeInTheDocument();
+    releaseWait({ status: 1, blockNumber: 42 });
+    await screen.findByText('block 42');
+  });
+
+  it('keeps the transaction status visible when a compile lands mid-confirmation', async () => {
+    let releaseSend!: (sent: { hash: string; wait: () => Promise<{ status: number; blockNumber: number } | null> }) => void;
+    const f = fake({ send: () => new Promise(resolve => { releaseSend = resolve }) });
+    const { rerender } = render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await waitFor(() => expect(f.sendTransaction).toHaveBeenCalledOnce());
+    // A new compile lands while the wallet popup still holds the transaction.
+    // The unresolved broadcast outranks the fresh input: its story is still
+    // being written, and a second review must not race the send in flight.
+    rerender(panel(f.session, { output: { ...OUTPUT, program: '0x6002' } }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Execute program' })).not.toBeInTheDocument();
+    releaseSend({ hash: `0x${'ce'.repeat(32)}`, wait: async () => ({ status: 1, blockNumber: 42 }) });
+    // The transaction that left is reported, receipt and all (§14).
+    await screen.findByText('Confirmed');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(f.sendTransaction).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the broadcast hash through a new compile when tracking failed', async () => {
+    const hash = `0x${'9d'.repeat(32)}`;
+    const f = fake({
+      send: async () => {
+        throw Object.assign(new Error('could not detect network'), { info: { sendTransactionHash: hash } });
+      },
+    });
+    const { rerender } = render(panel(f.session));
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await screen.findByText(/submitted but not trackable/i);
+    // The hash is the only handle left to learn the outcome; a new compile
+    // may not discard it the way it discards a never-sent review (§8).
+    rerender(panel(f.session, { output: { ...OUTPUT, program: '0x6002' } }));
+    expect(await screen.findByText(hash)).toBeInTheDocument();
+  });
+
+  it('sends exactly once when Confirm is pressed under StrictMode', async () => {
+    const f = fake();
+    render(<StrictMode>
+      <WalletSessionContext.Provider value={f.session}>
+        <Harness output={OUTPUT} config={CONFIGURED} />
+      </WalletSessionContext.Provider>
+    </StrictMode>);
+    await statusIs('Ready');
+    fireEvent.click(execute());
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
+    await screen.findByText('Confirmed');
+    expect(f.sendTransaction).toHaveBeenCalledOnce();
   });
 });

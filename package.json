@@ -12,10 +12,13 @@
   "dependencies": {
     "@bosorus/lisa-evm": "0.3.0",
     "@codemirror/lang-javascript": "^6.2.4",
+    "@codemirror/language": "^6.13.1",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.38.2",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
+    "@lezer/highlight": "^1.2.5",
+    "@mui/icons-material": "^7.3.11",
     "@mui/material": "^7.3.2",
     "@noble/hashes": "^2.4.0",
     "@web3-onboard/core": "^2.24.1",
