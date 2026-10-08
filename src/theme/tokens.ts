@@ -52,6 +52,20 @@ export const tokens = {
     danger: '#ff9d97',
     dangerRgb: '255, 157, 151',
   },
+  /**
+   * Editor syntax roles, all >=4.5:1 on `surface.sunken` (the editor
+   * background). `basicSetup`'s default highlight style is tuned for light
+   * themes and is not used.
+   */
+  syntax: {
+    keyword: '#8ebdff',
+    comment: '#93a8c6',
+    string: '#9fd89f',
+    number: '#f6c177',
+    type: '#7fd3e8',
+    bool: '#ff9d97',
+    punctuation: '#93a8c6',
+  },
   /** Port fills double as the type legend: value/address/bool/condition. */
   port: {
     value: '#8ebdff',

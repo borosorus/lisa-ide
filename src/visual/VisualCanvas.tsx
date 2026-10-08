@@ -270,7 +270,7 @@ function Canvas({
         onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
         onPaneClick={() => { onSelectNode(null); onSelectEdge(null); }}
       >
-        <Background color={tokens.border.subtle} gap={24} />
+        <Background color={tokens.border.strong} gap={24} />
         <Controls showInteractive={false} />
         {project.nodes.length === 0 && (
           <Panel position="top-center">

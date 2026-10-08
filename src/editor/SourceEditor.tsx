@@ -4,8 +4,30 @@ import { EditorState, StateEffect, StateField } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, type CompletionContext } from '@codemirror/autocomplete';
 import { basicSetup } from 'codemirror';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
 import type { CompileDiagnostic } from '../compile/types';
 import { tokens } from '../theme/tokens';
+
+/**
+ * `basicSetup` bundles a highlight style tuned for light backgrounds; on the
+ * sunken surface most of its roles fall below AA. This overrides every role
+ * this grammar produces, from tokens (each >=4.5:1 on `surface.sunken`).
+ */
+const syntaxTheme = HighlightStyle.define([
+  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword], color: tokens.syntax.keyword, fontWeight: '600' },
+  { tag: [t.comment], color: tokens.syntax.comment, fontStyle: 'italic' },
+  { tag: [t.string, t.special(t.string)], color: tokens.syntax.string },
+  { tag: [t.number], color: tokens.syntax.number },
+  { tag: [t.bool, t.null], color: tokens.syntax.bool },
+  { tag: [t.typeName, t.className, t.namespace], color: tokens.syntax.type },
+  { tag: [t.propertyName], color: tokens.text.secondary },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: tokens.accent.primary },
+  { tag: [t.variableName, t.definition(t.variableName)], color: tokens.text.primary },
+  { tag: [t.operator, t.punctuation, t.separator, t.bracket], color: tokens.syntax.punctuation },
+  { tag: [t.meta], color: tokens.text.muted },
+  { tag: [t.invalid], color: tokens.status.danger, textDecoration: 'underline wavy' },
+]);
 
 const names = [
   'createProgram', 'encodeCall', 'rawCalldata', 'SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE',
@@ -73,6 +95,7 @@ export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
         doc: value,
         extensions: [
           basicSetup,
+          syntaxHighlighting(syntaxTheme, { fallback: true }),
           javascript(),
           autocompletion({ override: [lisaCompletions] }),
           placeholder('Write a LISA program…'),
