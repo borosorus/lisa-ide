@@ -22,7 +22,7 @@ describe('CompilerClient', () => {
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-  it('accepts only the matching response and terminates the Worker', async () => {
+  it('accepts only the matching response and keeps the Worker warm', async () => {
     const client = new CompilerClient();
     const promise = client.compile('return p;');
     const worker = FakeWorker.instances[0];
@@ -33,7 +33,9 @@ describe('CompilerClient', () => {
     const output = { program: '0x00', programHash: '0xhash', byteSize: 1, instructionCount: 1, disassembly: ['STOP'] };
     worker.reply({ id, ok: true, output });
     await expect(promise).resolves.toEqual(output);
-    expect(worker.terminated).toBe(true);
+    // The next compile reuses the same Worker instead of paying for a new one.
+    client.compile('again');
+    expect(FakeWorker.instances).toHaveLength(1);
   });
 
   it('uses the Worker for artifact inspection', async () => {
@@ -66,9 +68,13 @@ describe('CompilerClient', () => {
     const oldWorker = FakeWorker.instances[0];
     const second = client.compile('second');
     await expect(first).rejects.toThrow('Compilation cancelled');
-    expect(oldWorker.terminated).toBe(true);
+    // Cancelling abandons the request, not the Worker: it stays warm.
+    expect(oldWorker.terminated).toBe(false);
     client.cancel();
     await expect(second).rejects.toThrow('Compilation cancelled');
+    expect(oldWorker.terminated).toBe(false);
+    client.dispose();
+    expect(oldWorker.terminated).toBe(true);
   });
 
   it('terminates a Worker that exceeds the time limit', async () => {

@@ -81,7 +81,7 @@ export default function App() {
   const canvasApi = useRef<CanvasApi | null>(null);
   const revision = useRef(0);
 
-  useEffect(() => () => client.current?.cancel(), []);
+  useEffect(() => () => client.current?.dispose(), []);
   useEffect(() => saveStoredProject({ version: 1, mode, codeSource: source, visual: project }), [mode, source, project]);
   // One pure validation pass feeds both the canvas error states and compile.
   const diagnostics = useMemo(() => validateProject(project), [project]);

@@ -25,6 +25,7 @@ vi.mock('./compile/client', () => {
       compile = compileMock;
       inspect = inspectMock;
       cancel = cancelMock;
+      dispose = cancelMock;
     },
   };
 });
