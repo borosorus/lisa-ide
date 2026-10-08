@@ -43,7 +43,9 @@ export function WalletExecutionPanel({ execution, executeLocation = 'strip' }: P
       {gate.kind === 'ready' && <Chip size="small" variant="outlined" label={`Runtime ${gate.runtime}`} />}
       {executeLocation === 'strip' && <Box sx={{ ml: 'auto' }}><ExecuteButton execution={execution} /></Box>}
     </Stack>
-    {executeLocation === 'strip' && alert !== null && phase.kind !== 'review' && <Alert
+    {/* The gate explanation and the network switch are the strip's own status
+        story: always here, wherever the Execute action happens to live. */}
+    {alert !== null && phase.kind !== 'review' && <Alert
       severity={alert.severity} sx={{ mt: 1 }} role="status"
       action={gate.kind === 'wrong-chain'
         ? <Button size="small" color="inherit" disabled={execution.switching} onClick={() => void execution.requestSwitch()}>

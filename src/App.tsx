@@ -75,6 +75,8 @@ export default function App() {
   // One-deep, single-slot undo for graph deletions: a hand-built graph can lose
   // minutes of wiring to one Delete keypress, and that keystroke is silent.
   const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string } | null>(null);
+  // Lets a deletion's own editVisual pass through without voiding the slot it just filled.
+  const keepUndoSlot = useRef(false);
   // Visual mode gives the canvas the space: Output starts collapsed there.
   const [outputOpen, setOutputOpen] = useState(stored.mode !== 'visual');
   useEffect(() => { setOutputOpen(mode !== 'visual'); }, [mode]);
@@ -130,6 +132,10 @@ export default function App() {
   /** Semantic graph edits invalidate compiled output; position edits do not. */
   function editVisual(transform: VisualProject | ((prev: VisualProject) => VisualProject), positional = false) {
     if (!positional) invalidateOutput();
+    // Any graph edit other than a deletion voids that deletion's undo slot:
+    // restoring the snapshot would silently discard the later work.
+    if (keepUndoSlot.current) keepUndoSlot.current = false;
+    else setUndo(null);
     setProject(prev => typeof transform === 'function' ? transform(prev) : transform);
   }
 
@@ -219,17 +225,17 @@ export default function App() {
     if (selectedId && ids.includes(selectedId)) setSelectedId(null);
     if (selectedBranch && ids.includes(selectedBranch.nodeId)) setSelectedBranch(null);
     const edgesLost = project.edges.filter(e => ids.includes(e.from.node) || ids.includes(e.to.node)).length;
-    setUndo({
-      snapshot: project,
-      message: `Removed ${ids.length} node${ids.length === 1 ? '' : 's'}${edgesLost > 0 ? ` and ${edgesLost} edge${edgesLost === 1 ? '' : 's'}` : ''}`,
-    });
+    const message = `Removed ${ids.length} node${ids.length === 1 ? '' : 's'}${edgesLost > 0 ? ` and ${edgesLost} edge${edgesLost === 1 ? '' : 's'}` : ''}`;
+    keepUndoSlot.current = true;
     editVisual(p => removeNodes(p, ids));
+    setUndo({ snapshot: project, message });
   }
 
   function deleteEdges(ids: string[]) {
     if (selectedEdgeId && ids.includes(selectedEdgeId)) setSelectedEdgeId(null);
-    setUndo({ snapshot: project, message: `Removed ${ids.length} edge${ids.length === 1 ? '' : 's'}` });
+    keepUndoSlot.current = true;
     editVisual(p => ids.reduce(removeEdge, p));
+    setUndo({ snapshot: project, message: `Removed ${ids.length} edge${ids.length === 1 ? '' : 's'}` });
   }
 
   async function compile() {

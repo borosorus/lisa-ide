@@ -451,6 +451,20 @@ describe('App', () => {
     });
   });
 
+  it('voids the undo slot when the graph is edited again after a deletion', async () => {
+    render(<App />);
+    toVisual();
+    await addContract();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-delete-first' }));
+    await screen.findByText(/Removed 1 node/);
+    // A later edit means a wholesale snapshot restore would discard it — so undo goes.
+    fireEvent.click(screen.getByRole('button', { name: 'Context' }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.nodes).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument());
+  });
+
   it('collapses the library to widen the canvas', async () => {
     render(<App />);
     toVisual();

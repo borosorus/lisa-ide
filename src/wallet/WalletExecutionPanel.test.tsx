@@ -7,6 +7,7 @@ import { lisaAccountInterface } from '../lisa-account/abi';
 import type { AccountReader, DeploymentConfig } from '../lisa-account/types';
 import type { CompileOutput } from '../compile/types';
 import { WalletExecutionPanel } from './WalletExecutionPanel';
+import { ExecuteActions } from './ExecuteActions';
 import { useWalletExecution } from './useWalletExecution';
 import { WalletSessionContext, DISCONNECTED_SESSION, type WalletSession } from './session';
 
@@ -92,14 +93,17 @@ function fake(options: Options = {}): Fake {
   return { session, reader, sendTransaction, live };
 }
 
-/** The composition App owns: controller + strip view, under a fake session. */
+/** The composition App owns: controller + strip view (+ Output-side action), under a fake session. */
 function Harness({ output, config, location = 'strip' }: {
   output: CompileOutput | null;
   config: DeploymentConfig;
   location?: 'strip' | 'output';
 }) {
   const execution = useWalletExecution(output, config);
-  return <WalletExecutionPanel execution={execution} executeLocation={location} />;
+  return <>
+    <WalletExecutionPanel execution={execution} executeLocation={location} />
+    {location === 'output' && <ExecuteActions execution={execution} />}
+  </>;
 }
 
 function panel(session: WalletSession, over: { output?: CompileOutput | null; config?: DeploymentConfig } = {}) {
@@ -313,6 +317,22 @@ describe('WalletExecutionPanel', () => {
     expect(switchChain).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Switch network' }));
     await waitFor(() => expect(switchChain).toHaveBeenCalledWith(CHAIN));
+  });
+
+  it('keeps the gate explanation in the strip while the action sits with the program', async () => {
+    const switchChain = vi.fn(async () => {});
+    const f = fake({ chainId: '11155111', switchChain });
+    render(<WalletSessionContext.Provider value={f.session}>
+      <Harness output={OUTPUT} config={CONFIGURED} location="output" />
+    </WalletSessionContext.Provider>);
+    await statusIs(/wrong network/i);
+    // The strip still owns the status story even though the button lives elsewhere.
+    expect(screen.getByRole('status')).toHaveTextContent(/chain 11155111/);
+    fireEvent.click(screen.getByRole('button', { name: 'Switch network' }));
+    await waitFor(() => expect(switchChain).toHaveBeenCalledWith(CHAIN));
+    // The action sits with the program, disabled while the gate refuses (§2).
+    expect(execute()).toBeDisabled();
+    expect(f.reader.getCode).not.toHaveBeenCalled();
   });
 
   it('reports a runtime address that has no code, and never calls it ready (§3)', async () => {
