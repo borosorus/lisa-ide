@@ -26,6 +26,10 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 .visual-workspace .side-pane .pane-heading { justify-content: flex-end; }
 .side-content { padding: 12px 16px; overflow: auto; flex: 1; }
 .side-section { border-top: 1px solid var(--lisa-border); padding-top: 10px; margin-top: 10px; }
+/* Port type legend: teaches what the card dots mean without a manual. */
+.port-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--lisa-border); }
+.port-legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--lisa-text-muted); }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid var(--lisa-bg); }
 .function-item { padding: 5px 10px; margin-top: 4px; cursor: grab; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--lisa-text); border-color: var(--lisa-border-strong) !important; }
 .function-item:hover { background: var(--lisa-hover); border-color: var(--lisa-primary) !important; }
 

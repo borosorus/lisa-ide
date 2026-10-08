@@ -1,8 +1,16 @@
 import { Box, Button, Stack, Typography } from '@mui/material';
 import { DEFAULT_HASH_DATA, type GraphNode, type GraphNodeDraft, type VisualProject } from './model';
 import { findFunction } from './ports';
+import { tokens } from '../theme/tokens';
 
 /** Sidebar: create nodes; the selected node gets compact read-only details. */
+
+const PORT_LEGEND: ReadonlyArray<{ readonly color: string; readonly label: string }> = [
+  { color: tokens.port.value, label: 'value' },
+  { color: tokens.port.address, label: 'address' },
+  { color: tokens.port.bool, label: 'bool' },
+  { color: tokens.port.condition, label: 'condition' },
+];
 
 export function VisualPalette({ onAdd }: {
   onAdd: (node: GraphNodeDraft, prefix: string) => void;
@@ -21,6 +29,13 @@ export function VisualPalette({ onAdd }: {
         onClick={() => onAdd({ kind: 'guard' }, 'guard')}>Guard</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'if' }, 'if')}>IF</Button>
     </Stack>
+    {/* Port fills carry type; the meaning is otherwise never taught. */}
+    <Box className="port-legend" aria-label="Port type colors">
+      {PORT_LEGEND.map(port => <span key={port.label} className="port-legend-item">
+        <i className="legend-dot" style={{ background: port.color }} aria-hidden="true" />
+        {port.label}
+      </span>)}
+    </Box>
   </Box>;
 }
 

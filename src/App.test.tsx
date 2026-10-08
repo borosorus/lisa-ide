@@ -148,6 +148,8 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
     expect(await screen.findByText('Line 2:5: Unknown name: NOPE')).toBeInTheDocument();
     expect(screen.getByTestId('editor-diagnostic')).toHaveTextContent('2:5');
+    // A line-carrying error offers the way back to the line.
+    fireEvent.click(screen.getByRole('button', { name: 'Go to line' }));
   });
 
   it('copies bytecode and exports a JSON artifact', async () => {
@@ -180,6 +182,15 @@ describe('App', () => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       expect(saved.codeSource).toBe('changed');
     });
+  });
+
+  it('explains why a previous result disappeared when its input changed', async () => {
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    fireEvent.change(screen.getByLabelText('LISA source editor'), { target: { value: 'changed' } });
+    expect(await screen.findByText('Previous output cleared — the source or graph behind it changed.')).toBeInTheDocument();
   });
 
   // §4: an artifact is a thing to look at, not a thing to run. The panel is mocked
@@ -418,6 +429,25 @@ describe('App', () => {
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       expect(saved.visual.nodes[0].name).toBe('CALLER');
+    });
+  });
+
+  it('restores a deleted node and its edges from the undo action', async () => {
+    render(<App />);
+    toVisual();
+    await addContract();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
+    await waitFor(() => expect((JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.edges)).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-delete-first' }));
+    await screen.findByText(/Removed 1 node and 1 edge/);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual;
+      expect(saved.nodes).toHaveLength(2);
+      expect(saved.edges).toHaveLength(1);
     });
   });
 

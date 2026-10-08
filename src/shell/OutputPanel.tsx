@@ -19,13 +19,20 @@ export function OutputPanel(props: {
   actions?: ReactNode;
   onCopy(): void;
   onDownload(): void;
+  /** When present, a line-carrying error offers the way to it. */
+  onErrorReveal?(line: number): void;
 }) {
   const [tab, setTab] = useState(0);
   const { output, error, busy } = props;
   const showGenerated = props.generated.length > 0;
   const shown = showGenerated ? tab : Math.min(tab, 1);
   return <>
-    {error && <Alert severity="error" sx={{ mb: 2, overflowWrap: 'anywhere' }}>{diagnosticLabel(error)}</Alert>}
+    {error && <Alert severity="error" sx={{ mb: 2, overflowWrap: 'anywhere' }}
+      action={error.line && props.onErrorReveal
+        ? <Button size="small" color="inherit" onClick={() => props.onErrorReveal!(error.line!)}>Go to line</Button>
+        : undefined}>
+      {diagnosticLabel(error)}
+    </Alert>}
     {props.notice && <Alert severity="info" sx={{ mb: 2 }}>{props.notice}</Alert>}
     {busy && <Typography color="text.secondary">Processing program…</Typography>}
     {!busy && !output && !error && <Typography color="text.secondary">Compile source or import an artifact to inspect the program.</Typography>}

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { EditorView, keymap, placeholder, Decoration, type DecorationSet } from '@codemirror/view';
 import { EditorState, StateEffect, StateField } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
@@ -75,18 +75,34 @@ const diagnosticField = StateField.define<DecorationSet>({
   provide: field => EditorView.decorations.from(field),
 });
 
-export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
+export interface SourceEditorHandle {
+  /** Put the cursor on a 1-based line and center it — how an error becomes a place. */
+  revealLine(line: number): void;
+}
+
+export const SourceEditor = forwardRef<SourceEditorHandle, {
   value: string;
   onChange: (value: string) => void;
   onCompile: () => void;
   diagnostic?: CompileDiagnostic | null;
-}) {
+}>(function SourceEditor({ value, onChange, onCompile, diagnostic }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onCompileRef = useRef(onCompile);
   onChangeRef.current = onChange;
   onCompileRef.current = onCompile;
+
+  useImperativeHandle(ref, () => ({
+    revealLine(line: number) {
+      const editor = view.current;
+      if (!editor) return;
+      const target = Math.min(Math.max(1, Math.trunc(line)), editor.state.doc.lines);
+      const pos = editor.state.doc.line(target).from;
+      editor.dispatch({ selection: { anchor: pos, head: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+      editor.focus();
+    },
+  }), []);
 
   useEffect(() => {
     if (!host.current) return;
@@ -135,4 +151,4 @@ export function SourceEditor({ value, onChange, onCompile, diagnostic }: {
   }, [diagnostic]);
 
   return <div ref={host} aria-label="LISA source editor" className="editor" />;
-}
+});

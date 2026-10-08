@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Button, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
-  Stack, Tab, Tabs, ThemeProvider, Typography,
+  Snackbar, Stack, Tab, Tabs, ThemeProvider, Typography,
 } from '@mui/material';
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
 import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
@@ -12,7 +12,7 @@ import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
 import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
-import { SourceEditor } from './editor/SourceEditor';
+import { SourceEditor, type SourceEditorHandle } from './editor/SourceEditor';
 import { SOURCE_EXAMPLES, STARTER_SOURCE } from './editor/examples';
 import { CompilerClient, CompilerError } from './compile/client';
 import { createArtifact, parseArtifact, type ProgramArtifact } from './compile/artifact';
@@ -72,6 +72,9 @@ export default function App() {
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [libraryTab, setLibraryTab] = useState(0);
   const [libraryOpen, setLibraryOpen] = useState(true);
+  // One-deep, single-slot undo for graph deletions: a hand-built graph can lose
+  // minutes of wiring to one Delete keypress, and that keystroke is silent.
+  const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string } | null>(null);
   // Visual mode gives the canvas the space: Output starts collapsed there.
   const [outputOpen, setOutputOpen] = useState(stored.mode !== 'visual');
   useEffect(() => { setOutputOpen(mode !== 'visual'); }, [mode]);
@@ -79,6 +82,7 @@ export default function App() {
   useEffect(() => { if (error) setOutputOpen(true); }, [error]);
   const client = useRef<CompilerClient | null>(null);
   const canvasApi = useRef<CanvasApi | null>(null);
+  const editorRef = useRef<SourceEditorHandle | null>(null);
   const revision = useRef(0);
 
   useEffect(() => () => client.current?.dispose(), []);
@@ -98,17 +102,24 @@ export default function App() {
 
   function replaceSource(next: string, nextNotice = '') {
     if (next === source) {
-      setNotice(nextNotice);
+      if (nextNotice !== '') setNotice(nextNotice);
       return;
     }
     invalidateOutput();
     setSource(next);
-    setNotice(nextNotice);
+    // An empty notice means "keep whatever explanation is showing"; an
+    // explicit one (a loaded example) replaces it.
+    if (nextNotice !== '') setNotice(nextNotice);
   }
 
   function invalidateOutput() {
     revision.current++;
     client.current?.cancel();
+    // A visible result that vanishes because its input moved should say so;
+    // silently reverting to "idle" reads as a glitch.
+    if (output !== null || importedArtifact !== null) {
+      setNotice('Previous output cleared — the source or graph behind it changed.');
+    }
     setOutput(null);
     setImportedArtifact(null);
     setError(null);
@@ -195,6 +206,30 @@ export default function App() {
     const id = createId(project.nodes.map(n => n.id), 'call');
     setFocusNodeId(id);
     editVisual(p => placeNode(p, { id, kind: 'call', contractId, signature }));
+  }
+
+  /** Restore the deleted graph; any compiled output was already invalidated. */
+  function undoDelete() {
+    const snapshot = undo?.snapshot;
+    setUndo(null);
+    if (snapshot) editVisual(snapshot);
+  }
+
+  function deleteNodes(ids: string[]) {
+    if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+    if (selectedBranch && ids.includes(selectedBranch.nodeId)) setSelectedBranch(null);
+    const edgesLost = project.edges.filter(e => ids.includes(e.from.node) || ids.includes(e.to.node)).length;
+    setUndo({
+      snapshot: project,
+      message: `Removed ${ids.length} node${ids.length === 1 ? '' : 's'}${edgesLost > 0 ? ` and ${edgesLost} edge${edgesLost === 1 ? '' : 's'}` : ''}`,
+    });
+    editVisual(p => removeNodes(p, ids));
+  }
+
+  function deleteEdges(ids: string[]) {
+    if (selectedEdgeId && ids.includes(selectedEdgeId)) setSelectedEdgeId(null);
+    setUndo({ snapshot: project, message: `Removed ${ids.length} edge${ids.length === 1 ? '' : 's'}` });
+    editVisual(p => ids.reduce(removeEdge, p));
   }
 
   async function compile() {
@@ -307,6 +342,7 @@ export default function App() {
     actions={executeLocation === 'output' ? <ExecuteActions execution={execution} /> : undefined}
     onCopy={copy}
     onDownload={download}
+    onErrorReveal={line => editorRef.current?.revealLine(line)}
   />;
 
   return <ThemeProvider theme={theme}>
@@ -348,6 +384,7 @@ export default function App() {
             </Stack>
           </Stack>
           <SourceEditor
+            ref={editorRef}
             value={source}
             onChange={next => replaceSource(next)}
             onCompile={compile}
@@ -366,15 +403,8 @@ export default function App() {
             project={project}
             onMoveNodes={moveNodes}
             onAddCallNode={addCallNode}
-            onDeleteNodes={ids => {
-              if (selectedId && ids.includes(selectedId)) setSelectedId(null);
-              if (selectedBranch && ids.includes(selectedBranch.nodeId)) setSelectedBranch(null);
-              editVisual(p => removeNodes(p, ids));
-            }}
-            onDeleteEdges={ids => {
-              if (selectedEdgeId && ids.includes(selectedEdgeId)) setSelectedEdgeId(null);
-              editVisual(p => ids.reduce(removeEdge, p));
-            }}
+            onDeleteNodes={deleteNodes}
+            onDeleteEdges={deleteEdges}
             onConnect={(from, to) => editVisual(p => connectPort(p, { from, to }))}
             onPatchNode={(id, fields) => editVisual(p => updateNode(p, id, fields))}
             onResizeIf={(id, size) => editVisual(p => setNodeFrameSize(p, id, size), true)}
@@ -446,6 +476,13 @@ export default function App() {
           {outputOpen && <Box className="output-content">{outputPanel}</Box>}
         </Paper>
       </Box>}
+      <Snackbar
+        open={undo !== null}
+        autoHideDuration={7000}
+        onClose={() => setUndo(null)}
+        message={undo?.message ?? ''}
+        action={<Button size="small" color="inherit" onClick={undoDelete}>Undo</Button>}
+      />
     </Box>
   </ThemeProvider>;
 }
