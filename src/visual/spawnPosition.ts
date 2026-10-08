@@ -29,8 +29,11 @@ export function nodeSize(node: GraphNode, project: VisualProject): Size {
     case 'binary':
       // Two input rows plus the operator row carrying the output.
       return { width: 200, height: 137 };
+    case 'balance':
+      // One address row plus the row carrying the output handle.
+      return { width: 200, height: 108 };
     default:
-      // Context/literal: the single control row also hosts the output handle.
+      // Context/literal/hash/guard: one row, which also hosts the output handle.
       return { width: 180, height: 79 };
   }
 }

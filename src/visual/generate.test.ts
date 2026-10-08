@@ -454,3 +454,149 @@ describe('ELSE generation', () => {
     expect(generateVisualSource(moved)).toBe(src);
   });
 });
+
+describe('balance, hash, and guard nodes', () => {
+  function graph(nodes: GraphNode[], edges: GraphEdge[]): VisualProject {
+    return {
+      ...emptyProject(),
+      contracts: [{ id: 'c1', name: 'VAULT', address: VAULT, functions: VAULT_FNS }],
+      nodes, edges,
+    };
+  }
+
+  function guardGraph(): VisualProject {
+    return graph([
+      { id: 'bal1', kind: 'balance' },
+      { id: 'self1', kind: 'context', name: 'SELF' },
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1000' },
+      { id: 'cmp1', kind: 'binary', op: 'gt' },
+      { id: 'guard1', kind: 'guard' },
+    ], [
+      { id: 'e1', from: { node: 'self1', port: 'out' }, to: { node: 'bal1', port: 'address' } },
+      { id: 'e2', from: { node: 'bal1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+      { id: 'e3', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
+      { id: 'e4', from: { node: 'cmp1', port: 'out' }, to: { node: 'guard1', port: 'condition' } },
+    ]);
+  }
+
+  it('inlines the balance and lowers the guard to revertUnless', () => {
+    const source = generateVisualSource(guardGraph());
+    expect(source).toContain('p.revertUnless((p.balance(SELF)).gt(1000n));');
+    expect(compileSource(source).program).toBe(compileSource(`const p = createProgram();
+p.revertUnless((p.balance(SELF)).gt(1000n));
+return p;`).program);
+  });
+
+  it('re-reads a balance at every site that consumes it', () => {
+    const project = graph([
+      { id: 'bal1', kind: 'balance' },
+      { id: 'self1', kind: 'context', name: 'SELF' },
+      { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+      { id: 'call2', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+    ], [
+      { id: 'e1', from: { node: 'self1', port: 'out' }, to: { node: 'bal1', port: 'address' } },
+      { id: 'e2', from: { node: 'bal1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+      { id: 'e3', from: { node: 'bal1', port: 'out' }, to: { node: 'call2', port: 'arg:0' } },
+    ]);
+    const output = compileSource(generateVisualSource(project));
+    expect(output.disassembly.filter(line => line.includes('BALANCE'))).toHaveLength(2);
+  });
+
+  it('keeps canvas position and node order out of a balance output', () => {
+    const base = guardGraph();
+    const moved: VisualProject = {
+      ...base,
+      positions: Object.fromEntries(base.nodes.map((n, i) => [n.id, { x: i * 999, y: -i * 4321 }])),
+    };
+    expect(generateVisualSource(moved)).toBe(generateVisualSource(base));
+    const reversed: VisualProject = { ...base, nodes: [...base.nodes].reverse() };
+    expect(generateVisualSource(reversed)).toBe(generateVisualSource(base));
+  });
+
+  it('refuses a balance nothing reads and a guard without a condition', () => {
+    const unread = graph([
+      { id: 'bal1', kind: 'balance' },
+      { id: 'self1', kind: 'context', name: 'SELF' },
+    ], [{ id: 'e1', from: { node: 'self1', port: 'out' }, to: { node: 'bal1', port: 'address' } }]);
+    expect(() => generateVisualSource(unread)).toThrow(/Balance is never read/);
+    const bare = graph([{ id: 'guard1', kind: 'guard' }], []);
+    expect(() => generateVisualSource(bare)).toThrow(/unless is missing an input/);
+  });
+
+  it('hashes once and shares the digest, like a bound constant in source mode', () => {
+    const project = graph([
+      { id: 'hash1', kind: 'keccak', data: '0xdeadbeef' },
+      { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+      { id: 'call2', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+    ], [
+      { id: 'e1', from: { node: 'hash1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+      { id: 'e2', from: { node: 'hash1', port: 'out' }, to: { node: 'call2', port: 'arg:0' } },
+    ]);
+    const source = generateVisualSource(project);
+    expect(source.match(/p\.keccak\(/g)).toHaveLength(1);
+    expect(source).toMatch(/^const \w+ = p\.keccak\("0xdeadbeef"\);$/m);
+    const output = compileSource(source);
+    expect(output.disassembly.filter(line => line.includes('KECCAK256'))).toHaveLength(1);
+    expect(output.program).toBe(compileSource(`const p = createProgram();
+const h = p.keccak("0xdeadbeef");
+const v = "${VAULT}";
+p.call(v, encodeCall("deposit(uint256)", [h]));
+p.call(v, encodeCall("deposit(uint256)", [h]));
+return p;`).program);
+  });
+
+  it('emits a hash even when nothing consumes it, because it occupies a slot', () => {
+    const source = generateVisualSource(graph([{ id: 'hash1', kind: 'keccak', data: '0x' }], []));
+    expect(source).toContain('p.keccak("0x")');
+    expect(compileSource(source).program).toBe(compileSource('const p = createProgram();\nconst h = p.keccak("0x");\nreturn p;').program);
+  });
+
+  it('refuses hash data that is not byte data', () => {
+    const project = graph([{ id: 'hash1', kind: 'keccak', data: 'nope' }], []);
+    expect(() => generateVisualSource(project)).toThrow(/Hash data "nope" is not 0x-prefixed/);
+  });
+
+  it('lowers statements inside the branch that owns them', () => {
+    const project: VisualProject = {
+      ...graph([
+        { id: 'gas1', kind: 'context', name: 'GAS' },
+        { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
+        { id: 'cmp1', kind: 'binary', op: 'gt' },
+        { id: 'if1', kind: 'if', hasElse: true },
+        { id: 'hash1', kind: 'keccak', data: '0x01', parent: 'if1', branch: 'then' },
+        { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if1', branch: 'then' },
+        { id: 'guard1', kind: 'guard', parent: 'if1', branch: 'else' },
+      ], [
+        { id: 'e1', from: { node: 'gas1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+        { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
+        { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+        { id: 'e4', from: { node: 'hash1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+        { id: 'e5', from: { node: 'cmp1', port: 'out' }, to: { node: 'guard1', port: 'condition' } },
+      ]),
+      frameSizes: {},
+    };
+    const source = generateVisualSource(project);
+    const thenBody = source.slice(source.indexOf('p.if('), source.indexOf('}, () => {'));
+    const elseBody = source.slice(source.indexOf('}, () => {'));
+    expect(thenBody).toContain('p.keccak("0x01")');
+    expect(elseBody).toContain('p.revertUnless(');
+    expect(() => compileSource(source)).not.toThrow();
+  });
+
+  it('never lets a branch-local digest or guard escape its block', () => {
+    const project = graph([
+      { id: 'gas1', kind: 'context', name: 'GAS' },
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
+      { id: 'cmp1', kind: 'binary', op: 'gt' },
+      { id: 'if1', kind: 'if' },
+      { id: 'hash1', kind: 'keccak', data: '0x01', parent: 'if1', branch: 'then' },
+      { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
+    ], [
+      { id: 'e1', from: { node: 'gas1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+      { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
+      { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+      { id: 'e4', from: { node: 'hash1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
+    ]);
+    expect(() => generateVisualSource(project)).toThrow(/cannot be used outside that block/);
+  });
+});

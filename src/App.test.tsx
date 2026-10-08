@@ -349,6 +349,50 @@ describe('App', () => {
     expect(compileMock).toHaveBeenCalledWith(expect.stringContaining('createProgram'));
   });
 
+  it('lowers balance, hash, and guard nodes into the source it compiles', async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [], positions: {}, frameSizes: {},
+        nodes: [
+          { id: 'self1', kind: 'context', name: 'SELF' },
+          { id: 'bal1', kind: 'balance' },
+          { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '7' },
+          { id: 'cmp1', kind: 'binary', op: 'gt' },
+          { id: 'guard1', kind: 'guard' },
+          { id: 'hash1', kind: 'keccak', data: '0x01' },
+        ],
+        edges: [
+          { id: 'e1', from: { node: 'self1', port: 'out' }, to: { node: 'bal1', port: 'address' } },
+          { id: 'e2', from: { node: 'bal1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+          { id: 'e3', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
+          { id: 'e4', from: { node: 'cmp1', port: 'out' }, to: { node: 'guard1', port: 'condition' } },
+        ],
+      },
+    }));
+    compileMock.mockResolvedValue(output);
+    render(<App />);
+    toVisual();
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    openOutput();
+    await screen.findByLabelText('Compiled bytecode');
+    expect(compileMock).toHaveBeenCalledWith(expect.stringContaining('p.revertUnless((p.balance(SELF)).gt(7n)'));
+    expect(compileMock).toHaveBeenCalledWith(expect.stringContaining('p.keccak("0x01")'));
+  });
+
+  it('creates balance, hash, and guard nodes from the palette', async () => {
+    render(<App />);
+    toVisual();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Balance' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hash' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Guard' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.nodes.map((n: { kind: string }) => n.kind)).toEqual(['balance', 'keccak', 'guard']);
+    });
+  });
+
   it('shows graph-level errors without invoking the Worker', async () => {
     render(<App />);
     toVisual();

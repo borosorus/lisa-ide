@@ -20,7 +20,13 @@ Visual graph -> lowering ───┘
 
 Add **contracts** once (name + address + pasted ABI JSON); their functions appear in the sidebar and
 can be dragged onto the canvas. Fill value inputs from **context** nodes (`SELF`, `CALLER`, `GAS`,
-`TIMESTAMP`, `SELFBALANCE`), **literals**, and **operations** (`add`/`sub`/`mul`/`div`/`lt`/`gt`/`eq`).
+`TIMESTAMP`, `SELFBALANCE`), **literals**, **operations** (`add`/`sub`/`mul`/`div`/`lt`/`gt`/`eq`), a
+**balance** read of the address it receives, and a **hash** of the byte data typed on its card. A
+balance reserves no slot and is re-read wherever it is consumed, so one that no
+emitted statement reaches is an error rather than a silent no-op; a hash is
+computed once and shared by everything that consumes it.
+A **guard** reverts when its condition is false, the same way a failed call reverts.
+
 Return data comes off the call node itself: every ABI output is an output port, and a static one-word
 output (`uintN`, `address`, `bool`, `bytesN`) is connectable, while a type that is not decodable yet —
 or an output whose position cannot be located — is shown disabled with the reason. Address-typed

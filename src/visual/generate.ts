@@ -116,6 +116,16 @@ function emitScope(
         statements.length > 0 ? `() => {\n${statements.join('\n')}\n${pad}}` : '() => {}';
       lines.push(`${pad}p.if(${condition}, ${body(thenBody)}`
         + `${hasElse ? `, ${body(elseBody)}` : ''});`);
+    } else if (node.kind === 'keccak') {
+      // A digest occupies a slot for as long as its scope lives, so it is a
+      // named constant even when nothing consumes it: dropping it would make
+      // the program's bytes depend on which edges happen to exist.
+      if (depth === 0) push(lines, '');
+      const name = ctx.names.assign(`hash_${identifier(node.id)}`, hashKey(node.id));
+      lines.push(`${pad}const ${name} = p.keccak("${node.data}");`);
+    } else if (node.kind === 'guard') {
+      if (depth === 0) push(lines, '');
+      lines.push(`${pad}p.revertUnless(${exprOf(ctx, node.id, 'condition')});`);
     }
   }
 }
@@ -163,6 +173,11 @@ function decodeKey(callId: string, index: number): string {
   return `out:${callId}:${index}`;
 }
 
+/** Name-pool key of the constant a hash node lowers to (one per node). */
+function hashKey(nodeId: string): string {
+  return `keccak:${nodeId}`;
+}
+
 /** Expression text for whatever feeds an input port; pure nodes inline. */
 function exprOf(ctx: Context, nodeId: string, port: string): string {
   const source = ctx.feed.get(`${nodeId}:${port}`);
@@ -189,6 +204,15 @@ function exprOfSource(ctx: Context, source: GraphEndpoint): string {
       if (!name) {
         throw new GraphError([{ node: node.id, port: source.port, message: 'Call output was never decoded at its call site' }]);
       }
+      return name;
+    }
+    case 'balance':
+      // Inlined per use: a balance reserves no slot, and repeating the read is
+      // exactly what a bound constant does in source mode, byte for byte.
+      return `p.balance(${exprOf(ctx, node.id, 'address')})`;
+    case 'keccak': {
+      const name = ctx.names.get(hashKey(node.id));
+      if (!name) throw new GraphError([{ node: node.id, message: 'Hash was not emitted before its use' }]);
       return name;
     }
     default:

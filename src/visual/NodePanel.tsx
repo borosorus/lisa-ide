@@ -1,5 +1,5 @@
 import { Box, Button, Stack, Typography } from '@mui/material';
-import type { GraphNode, GraphNodeDraft, VisualProject } from './model';
+import { DEFAULT_HASH_DATA, type GraphNode, type GraphNodeDraft, type VisualProject } from './model';
 import { findFunction } from './ports';
 
 /** Sidebar: create nodes; the selected node gets compact read-only details. */
@@ -13,6 +13,12 @@ export function VisualPalette({ onAdd }: {
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'context', name: 'SELF' }, 'ctx')}>Context</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'literal', literalType: 'uint', literal: '0' }, 'lit')}>Literal</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'binary', op: 'add' }, 'op')}>Operation</Button>
+      <Button size="small" variant="outlined" title="Read the balance of an address (BALANCE)"
+        onClick={() => onAdd({ kind: 'balance' }, 'bal')}>Balance</Button>
+      <Button size="small" variant="outlined" title="Hash constant byte data (KECCAK256)"
+        onClick={() => onAdd({ kind: 'keccak', data: DEFAULT_HASH_DATA }, 'hash')}>Hash</Button>
+      <Button size="small" variant="outlined" title="Revert unless a condition holds (REVERT)"
+        onClick={() => onAdd({ kind: 'guard' }, 'guard')}>Guard</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'if' }, 'if')}>IF</Button>
     </Stack>
   </Box>;
@@ -43,6 +49,15 @@ export function NodeInspector({ node, project }: {
     {node.kind === 'context' && <Typography variant="body2" color="text.secondary">Reads {node.name}.</Typography>}
     {node.kind === 'literal' && <Typography variant="body2" color="text.secondary">{node.literalType} = {node.literal}.</Typography>}
     {node.kind === 'binary' && <Typography variant="body2" color="text.secondary">Arithmetic on its inputs ({node.op}).</Typography>}
+    {node.kind === 'balance' && <Typography variant="body2" color="text.secondary">
+      Reads the balance of the address it receives. Nothing is stored — every use reads it again.
+    </Typography>}
+    {node.kind === 'keccak' && <Typography variant="body2" color="text.secondary">
+      Keccak-256 of {node.data === '0x' ? 'no data' : node.data}, computed once wherever it is used.
+    </Typography>}
+    {node.kind === 'guard' && <Typography variant="body2" color="text.secondary">
+      Reverts the program when its condition is false, carrying no revert data.
+    </Typography>}
     {node.kind === 'if' && <Typography variant="body2" color="text.secondary">
       Nodes dragged into its frame run inside it.
     </Typography>}

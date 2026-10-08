@@ -37,6 +37,10 @@ export function inputPorts(node: GraphNode, project: VisualProject): PortSpec[] 
         { name: 'lhs', kind: 'value', label: 'left' },
         { name: 'rhs', kind: 'value', label: 'right' },
       ];
+    case 'balance':
+      return [{ name: 'address', kind: 'address', label: 'address' }];
+    case 'guard':
+      return [{ name: 'condition', kind: 'condition', label: 'unless' }];
     case 'if':
       return [{ name: 'condition', kind: 'condition', label: 'if' }];
     default:
@@ -76,6 +80,13 @@ export function outputPorts(node: GraphNode, project: VisualProject): PortSpec[]
       }];
     case 'binary':
       return [{ name: 'out', kind: node.op === 'lt' || node.op === 'gt' || node.op === 'eq' ? 'condition' : 'value', label: 'value' }];
+    case 'balance':
+      // A balance is an ordinary word: it is re-read wherever it is consumed.
+      return [{ name: 'out', kind: 'value', label: 'balance' }];
+    case 'keccak':
+      return [{ name: 'out', kind: 'value', label: 'digest' }];
+    case 'guard':
+      return [];
     case 'if':
       return [];
   }

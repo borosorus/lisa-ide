@@ -341,3 +341,34 @@ describe('ELSE persistence', () => {
     });
   });
 });
+
+describe('new node kinds', () => {
+  it('round-trips balance, hash, and guard nodes', () => {
+    const project: StoredProject = {
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [],
+        nodes: [
+          { id: 'bal1', kind: 'balance' },
+          { id: 'hash1', kind: 'keccak', data: '0x00' },
+          { id: 'guard1', kind: 'guard', parent: undefined },
+        ],
+        edges: [], positions: { bal1: { x: 0, y: 0 } }, frameSizes: {},
+      },
+    };
+    expect(parseStoredProject(JSON.stringify(project)).visual).toEqual(project.visual);
+  });
+
+  it('drops a hash node whose data is not byte data', () => {
+    const parsed = parseStoredProject(JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [],
+        nodes: [{ id: 'hash1', kind: 'keccak', data: 'hello' }, { id: 'bal1', kind: 'balance' }],
+        edges: [], positions: { hash1: { x: 1, y: 2 }, bal1: { x: 3, y: 4 } }, frameSizes: {},
+      },
+    }));
+    expect(parsed.visual.nodes.map(n => n.id)).toEqual(['bal1']);
+    expect(parsed.visual.positions).toEqual({ bal1: { x: 3, y: 4 } });
+  });
+});

@@ -456,3 +456,81 @@ describe('branch-aware scope validation', () => {
       .toEqual(validateProject(forward).filter(d => d.node === 'e' && d.message.includes('branch')));
   });
 });
+
+describe('balance, hash, and guard diagnostics', () => {
+  it('requires an address on a balance and a condition on a guard', () => {
+    const p = project({ nodes: [{ id: 'bal', kind: 'balance' }, { id: 'grd', kind: 'guard' }] });
+    expect(messages(p)).toEqual(expect.arrayContaining([
+      'address is missing an input',
+      'unless is missing an input',
+    ]));
+  });
+
+  it('flags hash data that is not byte data', () => {
+    expect(messages(project({ nodes: [{ id: 'h', kind: 'keccak', data: 'nope' }] })))
+      .toContain('Hash data "nope" is not 0x-prefixed byte data');
+    expect(messages(project({ nodes: [{ id: 'h', kind: 'keccak', data: '0x' }] }))).toEqual([]);
+  });
+
+  it('marks a balance whose value nothing reads', () => {
+    const p = project({
+      nodes: [{ id: 'self', kind: 'context', name: 'SELF' }, { id: 'bal', kind: 'balance' }],
+      edges: [edge('self', 'out', 'bal', 'address')],
+    });
+    expect(messages(p)).toEqual(['Balance is never read; connect it to a call input, a guard, or an IF condition']);
+  });
+
+  it('reads a balance through the value graph, not just its own edges', () => {
+    // A balance feeding a comparison that nothing reads is still unread: the
+    // comparison emits nothing on its own, so BALANCE would never be emitted.
+    const dangling = project({
+      nodes: [
+        { id: 'self', kind: 'context', name: 'SELF' },
+        { id: 'bal', kind: 'balance' },
+        { id: 'lit', kind: 'literal', literalType: 'uint', literal: '1' },
+        { id: 'cmp', kind: 'binary', op: 'gt' },
+      ],
+      edges: [edge('self', 'out', 'bal', 'address'), edge('bal', 'out', 'cmp', 'lhs'), edge('lit', 'out', 'cmp', 'rhs')],
+    });
+    expect(messages(dangling)).toEqual(['Balance is never read; connect it to a call input, a guard, or an IF condition']);
+    const used = project({
+      nodes: [...dangling.nodes, { id: 'if1', kind: 'if' }],
+      edges: [...dangling.edges, edge('cmp', 'out', 'if1', 'condition')],
+    });
+    expect(messages(used)).toEqual([]);
+  });
+
+  it('takes a comparison into a guard and refuses a bool as an address', () => {
+    const ok = project({
+      nodes: [
+        { id: 'self', kind: 'context', name: 'SELF' },
+        { id: 'lit', kind: 'literal', literalType: 'uint', literal: '5' },
+        { id: 'cmp', kind: 'binary', op: 'gt' },
+        { id: 'grd', kind: 'guard' },
+      ],
+      edges: [edge('self', 'out', 'cmp', 'lhs'), edge('lit', 'out', 'cmp', 'rhs'), edge('cmp', 'out', 'grd', 'condition')],
+    });
+    expect(messages(ok)).toEqual([]);
+    const bad = project({
+      nodes: [{ id: 'lit', kind: 'literal', literalType: 'bool', literal: 'true' }, { id: 'bal', kind: 'balance' }],
+      edges: [edge('lit', 'out', 'bal', 'address')],
+    });
+    expect(messages(bad)).toContain('Cannot feed address from a bool output');
+  });
+
+  it('emits a guard or a hash by dependency and creation order, never by position', () => {
+    const p = project({
+      nodes: [
+        { id: 'grd', kind: 'guard' },
+        { id: 'cmp', kind: 'binary', op: 'lt' },
+        { id: 'a', kind: 'context', name: 'GAS' },
+        { id: 'b', kind: 'literal', literalType: 'uint', literal: '9' },
+        { id: 'h', kind: 'keccak', data: '0x01' },
+      ],
+      edges: [edge('a', 'out', 'cmp', 'lhs'), edge('b', 'out', 'cmp', 'rhs'), edge('cmp', 'out', 'grd', 'condition')],
+    });
+    const { order, cycle } = stableOrder(p);
+    expect(cycle).toEqual([]);
+    expect(order.indexOf('cmp')).toBeLessThan(order.indexOf('grd'));
+  });
+});

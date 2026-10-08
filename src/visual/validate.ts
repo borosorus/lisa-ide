@@ -1,6 +1,7 @@
 import {
   inputPorts, outputPorts, canConnect, type PortSpec,
 } from './ports';
+import { isBytesHex } from '../compile/hex';
 import { isValidLiteral, type GraphNode, type IfBranch, type VisualProject } from './model';
 
 /**
@@ -91,6 +92,9 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     if (node.kind === 'literal' && !isValidLiteral(node.literalType, node.literal)) {
       diagnostics.push({ node: node.id, message: `Literal "${node.literal}" is not a valid ${node.literalType}` });
     }
+    if (node.kind === 'keccak' && !isBytesHex(node.data)) {
+      diagnostics.push({ node: node.id, message: `Hash data "${node.data}" is not 0x-prefixed byte data` });
+    }
   }
 
   const drivers = new Map<string, number>();
@@ -123,6 +127,8 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
       if (violation) diagnostics.push({ node: target.id, message: violation });
     }
   }
+  const live = emittedReach(project);
+
   for (const node of project.nodes) {
     for (const port of inputPorts(node, project)) {
       const count = drivers.get(`${node.id}:${port.name}`) ?? 0;
@@ -131,6 +137,12 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
         diagnostics.push({ node: node.id, port: port.name, message: `${port.label} is missing an input` });
       }
     }
+    // A balance is an expression with a side effect to read: followed nowhere,
+    // it lowers to no instruction at all. Other pure nodes stay inert-but-legal
+    // on the canvas, so only the one that looks like a check is refused.
+    if (node.kind === 'balance' && !live.has(node.id)) {
+      diagnostics.push({ node: node.id, port: 'out', message: 'Balance is never read; connect it to a call input, a guard, or an IF condition' });
+    }
   }
 
   const { cycle } = stableOrder(project);
@@ -138,6 +150,32 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     diagnostics.push({ node: cycle[0], message: `Value cycle detected through: ${cycle.join(' → ')}` });
   }
   return diagnostics;
+}
+
+/** Node kinds whose lowering emits a statement whether or not anything reads them. */
+const EMITTING = new Set<GraphNode['kind']>(['call', 'if', 'guard', 'keccak']);
+
+/**
+ * Nodes an emitted statement actually reaches: start at the nodes that lower
+ * to statements of their own and follow their inputs backwards. A pure node
+ * outside this set contributes no instruction at all, wherever it sits.
+ */
+function emittedReach(project: VisualProject): Set<string> {
+  const inputs = new Map<string, string[]>();
+  for (const edge of project.edges) {
+    const sources = inputs.get(edge.to.node);
+    if (sources) sources.push(edge.from.node);
+    else inputs.set(edge.to.node, [edge.from.node]);
+  }
+  const reached = new Set<string>();
+  const pending = project.nodes.filter(node => EMITTING.has(node.kind)).map(node => node.id);
+  while (pending.length > 0) {
+    const id = pending.pop()!;
+    if (reached.has(id)) continue;
+    reached.add(id);
+    for (const source of inputs.get(id) ?? []) pending.push(source);
+  }
+  return reached;
 }
 
 /**

@@ -3,6 +3,7 @@ import { Handle, Position, useUpdateNodeInternals, useViewport, type NodeProps }
 import { inputPorts, outputPorts, type PortSpec } from './ports';
 import type { Frame } from './containment';
 import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfBranch, type IfFrameSize, type LiteralType, type VisualProject } from './model';
+import { isBytesHex } from '../compile/hex';
 import type { NodeErrors } from './validate';
 
 /**
@@ -59,6 +60,12 @@ export function nodeLabel(node: GraphNode, project: VisualProject): string {
         : node.literal;
     case 'binary':
       return ({ add: '+', sub: '−', mul: '×', div: '÷', lt: '<', gt: '>', eq: '=' })[node.op];
+    case 'balance':
+      return 'BALANCE';
+    case 'keccak':
+      return `KECCAK256(${node.data})`;
+    case 'guard':
+      return 'REVERT UNLESS';
     case 'if':
       return 'IF';
   }
@@ -123,7 +130,8 @@ export function LisaNode({ id, data }: NodeProps) {
           <option value="true">true</option>
           <option value="false">false</option>
         </select>
-        : <InlineLiteral id={id} type={node.literalType} value={node.literal} edit={edit} stop={stop} />}
+        : <InlineField id={id} value={node.literal} ariaLabel="Literal value" edit={edit} stop={stop}
+            isValid={text => isValidLiteral(node.literalType, text)} commit={literal => ({ literal })} />}
       <Handle type="source" id="out" position={Position.Right}
         className={`port port-${node.literalType === 'address' ? 'address' : node.literalType === 'bool' ? 'bool' : 'value'}`} title="value (out)" />
     </div>}
@@ -134,6 +142,17 @@ export function LisaNode({ id, data }: NodeProps) {
       </select>
       <Handle type="source" id="out" position={Position.Right}
         className={`port ${node.op === 'lt' || node.op === 'gt' || node.op === 'eq' ? 'port-condition' : 'port-value'}`} title="result (out)" />
+    </div>}
+    {node.kind === 'balance' && <div className={`node-row right${bad('out') ? ' row-invalid' : ''}`}>
+      <span className="port-label">balance</span>
+      <Handle type="source" id="out" position={Position.Right}
+        className={`port port-value${bad('out') ? ' port-invalid' : ''}`} title="balance (out)" />
+    </div>}
+    {node.kind === 'keccak' && <div className={`node-row control${bad('out') ? ' row-invalid' : ''}`}>
+      <InlineField id={id} value={node.data} isValid={isBytesHex} commit={data => ({ data })}
+        ariaLabel="Hash data" edit={edit} stop={stop} />
+      <Handle type="source" id="out" position={Position.Right}
+        className={`port port-value${bad('out') ? ' port-invalid' : ''}`} title="digest (out)" />
     </div>}
     {node.kind === 'call' && outputs.map(port => <div className={`node-row right${bad(port.name) ? ' row-invalid' : ''}`} key={port.name}>
       <span className={`port-label${port.connectable === false ? ' unsupported' : ''}`}
@@ -249,11 +268,13 @@ function IfResizeGrip({ frame, edit }: { frame: Frame; edit: NodeEditApi | null 
     onPointerUp={event => finish(event, true)} onPointerCancel={() => finish(null, false)} />;
 }
 
-/** Free-text literal editor: commits only text the graph grammar accepts. */
-function InlineLiteral({ id, type, value, edit, stop }: {
+/** Free-text field on a card: commits only text the graph grammar accepts. */
+function InlineField({ id, value, isValid, commit, ariaLabel, edit, stop }: {
   id: string;
-  type: Exclude<LiteralType, 'bool'>;
   value: string;
+  isValid: (text: string) => boolean;
+  commit: (text: string) => Record<string, unknown>;
+  ariaLabel: string;
   edit: NodeEditApi | null;
   stop: React.HTMLAttributes<HTMLElement>;
 }) {
@@ -261,15 +282,15 @@ function InlineLiteral({ id, type, value, edit, stop }: {
   const [drafting, setDrafting] = useState(false);
   useEffect(() => { if (!drafting) setText(value); }, [value, drafting]);
   return <input
-    className={`nodrag node-input${drafting && !isValidLiteral(type, text) ? ' invalid' : ''}`}
+    className={`nodrag node-input${drafting && !isValid(text) ? ' invalid' : ''}`}
     value={text}
-    aria-label="Literal value"
+    aria-label={ariaLabel}
     spellCheck={false}
     {...stop}
     onFocus={() => setDrafting(true)}
     onChange={e => {
       setText(e.target.value);
-      if (isValidLiteral(type, e.target.value)) edit?.patch(id, { literal: e.target.value });
+      if (isValid(e.target.value)) edit?.patch(id, commit(e.target.value));
     }}
     onBlur={() => {
       setDrafting(false);
