@@ -14,7 +14,7 @@ import {
 import { useWalletSession, type WalletSession } from './session';
 
 /**
- * The whole wallet surface (AGENTS.md §7, §8, §14): one compact strip. It consumes
+ * The whole wallet surface: one compact strip. It consumes
  * the CompileOutput the IDE is already showing — it never compiles (§6) and never
  * touches a private key (§14). Native value is fixed at 0 (§9).
  */

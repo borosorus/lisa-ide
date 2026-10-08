@@ -106,8 +106,6 @@ npm run typecheck
 npm run build
 ```
 
-See [AGENTS.md](AGENTS.md) for the architecture constraints of the current phase.
-
 ## Authoring source
 
 Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser, and the Source header includes a few small examples that can replace the draft.

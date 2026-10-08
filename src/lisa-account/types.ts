@@ -2,10 +2,10 @@
  * Wallet-independent LisaAccount protocol types.
  *
  * Nothing here may import React, MUI, Web3-Onboard, or any UI code: this module
- * is meant to be extractable as a standalone package later (AGENTS.md §2, §15).
+ * is meant to be extractable as a standalone package later.
  */
 
-/** One explicit deployment on one explicit chain (AGENTS.md §1); multi-chain registries are a non-goal. */
+/** One explicit deployment on one explicit chain; multi-chain registries are a non-goal. */
 export type DeploymentConfig =
   | { readonly kind: 'configured'; readonly chainId: string; readonly runtime: string; readonly implementation: string }
   | { readonly kind: 'unconfigured' }
@@ -21,7 +21,7 @@ export type DelegationCode =
 
 /**
  * Classification of the connected account. Only `ready` may execute a program;
- * every other kind must disable execution and explain itself (AGENTS.md §4).
+ * every other kind must disable execution and explain itself.
  */
 export type LisaAccountStatus =
   | { readonly kind: 'unconfigured' }

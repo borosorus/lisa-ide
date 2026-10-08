@@ -1,7 +1,7 @@
 /**
  * Chain-id normalization, shared by deployment-config parsing and the wallet
  * layer. It lives here rather than in `src/wallet/` so the pure LISA helpers stay
- * self-contained and extractable (AGENTS.md §6), and so one rule covers every
+ * self-contained and extractable, and so one rule covers every
  * representation a chain id arrives in.
  *
  * Syntax only: `0` normalizes to `'0'`. Whether a chain id is *usable* is a

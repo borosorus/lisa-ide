@@ -2,7 +2,7 @@ import { CHAIN_ID_ENV, IMPLEMENTATION_ENV, RUNTIME_ENV, parseDeploymentConfig } 
 import type { DeploymentConfig } from '../lisa-account/types';
 
 /**
- * The single place the app reads Vite env (AGENTS.md §3). The variables are
+ * The single place the app reads Vite env. The variables are
  * optional as a set: an unconfigured build still starts, still connects a wallet,
  * and simply keeps every LISA action disabled. Half a deployment is not a
  * deployment, so it reports which variable is missing instead of guessing.

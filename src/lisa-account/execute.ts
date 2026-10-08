@@ -4,7 +4,7 @@ import { lisaAccountInterface } from './abi';
 import { LisaError, type LisaAccountStatus } from './types';
 
 /**
- * Transaction preparation (AGENTS.md §5, §8, §9). Pure: it builds calldata and a
+ * Transaction preparation. Pure: it builds calldata and a
  * transaction object, it never sends anything and never touches a provider.
  */
 

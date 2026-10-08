@@ -3,7 +3,7 @@ import { lisaAccountInterface } from './abi';
 import type { AccountReader, DelegationCode, DeploymentConfig, LisaAccountStatus } from './types';
 
 /**
- * Account inspection (AGENTS.md §4). Reads code, parses the EIP-7702 designator,
+ * Account inspection. Reads code, parses the EIP-7702 designator,
  * and only then probes `lisaRuntime()`. Every unrecognised shape fails closed —
  * nothing here can put the app in a state where it would execute a program
  * through an undelegated or foreign account.

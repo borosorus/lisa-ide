@@ -7,7 +7,7 @@ import { normalizeChainId } from './executionState';
 import { WalletSessionContext, requestChainSwitch, type WalletSession } from './session';
 
 /**
- * Adapts one connected Web3-Onboard wallet into a `WalletSession` (AGENTS.md §1).
+ * Adapts one connected Web3-Onboard wallet into a `WalletSession`.
  * All signing stays in the wallet; this component only resolves the session and
  * keeps account/chain changes observable so readiness can be invalidated (§14).
  */

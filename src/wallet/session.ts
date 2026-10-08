@@ -5,7 +5,7 @@ import type { AccountReader } from '../lisa-account/types';
 import { LisaError } from '../lisa-account/types';
 
 /**
- * The only wallet surface the app sees (AGENTS.md §1): connection/session state,
+ * The only wallet surface the app sees: connection/session state,
  * nothing protocol-specific. Kept apart from `WalletSessionContext.tsx` so that
  * importing `App` never imports Web3-Onboard — components read this context and
  * tests can provide a plain object.

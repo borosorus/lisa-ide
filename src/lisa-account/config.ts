@@ -3,7 +3,7 @@ import { normalizeChainId } from './chain';
 import type { DeploymentConfig } from './types';
 
 /**
- * Deployment configuration (AGENTS.md §3): one deployment on one chain, fully
+ * Deployment configuration: one deployment on one chain, fully
  * specified or absent. Nothing here reads `import.meta.env` — callers hand in the
  * values so this stays unit-testable without env stubbing.
  */

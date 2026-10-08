@@ -1,7 +1,7 @@
 import type { DeploymentConfig, LisaAccountStatus } from '../lisa-account/types';
 
 /**
- * Pure derivation of every execution-surface state (AGENTS.md §7). The panel only
+ * Pure derivation of every execution-surface state. The panel only
  * renders one of these, so "can I execute?" has exactly one answer in one place
  * rather than a pile of JSX conditionals.
  */

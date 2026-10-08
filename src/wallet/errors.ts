@@ -1,7 +1,7 @@
 import { LisaError, type LisaErrorCode } from '../lisa-account/types';
 
 /**
- * Error normalization at the wallet/LISA boundary (AGENTS.md §12). The UI renders
+ * Error normalization at the wallet/LISA boundary. The UI renders
  * `message` only — raw provider error objects never reach it — while `cause` and
  * `detail` keep whatever the provider gave for debugging.
  */

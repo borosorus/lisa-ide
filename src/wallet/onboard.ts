@@ -3,7 +3,7 @@ import injectedModule from '@web3-onboard/injected-wallets';
 import type { InitOptions, OnboardAPI } from '@web3-onboard/core';
 
 /**
- * Web3-Onboard setup (AGENTS.md §1). Initialization is memoized and lazy: it runs
+ * Web3-Onboard setup. Initialization is memoized and lazy: it runs
  * when the app mounts, never on import, so importing anything under `src/wallet`
  * cannot touch the DOM, read storage, or open a wallet modal (which StrictMode's
  * double effect would otherwise do twice).

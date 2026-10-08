@@ -1,7 +1,7 @@
 import { Interface } from 'ethers';
 
 /**
- * The whole LisaAccount ABI boundary the IDE needs (AGENTS.md §5). The runtime's
+ * The whole LisaAccount ABI boundary the IDE needs. The runtime's
  * own instruction set is deliberately absent — the program bytes are opaque.
  */
 export const LISA_ACCOUNT_ABI = [
