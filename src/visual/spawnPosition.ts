@@ -32,6 +32,12 @@ export function nodeSize(node: GraphNode, project: VisualProject): Size {
     case 'balance':
       // One address row plus the row carrying the output handle.
       return { width: 200, height: 108 };
+    case 'send':
+      // Two input rows (address, value) and no output.
+      return { width: 200, height: 137 };
+    case 'rawcall':
+      // Two input rows plus the calldata field row.
+      return { width: 220, height: 166 };
     default:
       // Context/literal/hash/guard: one row, which also hosts the output handle.
       return { width: 180, height: 79 };

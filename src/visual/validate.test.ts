@@ -534,3 +534,66 @@ describe('balance, hash, and guard diagnostics', () => {
     expect(order.indexOf('cmp')).toBeLessThan(order.indexOf('grd'));
   });
 });
+
+describe('send and raw call validation', () => {
+  it('requires both inputs on a send — an empty transfer is a mistake', () => {
+    expect(messages(project({ nodes: [{ id: 'send1', kind: 'send' }] }))).toEqual([
+      'address is missing an input',
+      'value (wei) is missing an input',
+    ]);
+  });
+
+  it('lets a raw call stand without a value: the third argument is simply omitted', () => {
+    const p = project({
+      nodes: [
+        { id: 'raw1', kind: 'rawcall', calldata: '0x12345678' },
+        { id: 'addr', kind: 'literal', literalType: 'address', literal: ADDRESS },
+      ],
+      edges: [edge('addr', 'out', 'raw1', 'address')],
+    });
+    expect(messages(p)).toEqual([]);
+  });
+
+  it('flags calldata that is not byte data and marks the field', () => {
+    const p = project({ nodes: [{ id: 'raw1', kind: 'rawcall', calldata: 'nope' }, { id: 'addr', kind: 'literal', literalType: 'address', literal: ADDRESS }], edges: [edge('addr', 'out', 'raw1', 'address')] });
+    expect(messages(p)).toContain('Calldata "nope" is not 0x-prefixed byte data');
+    const byNode = indexDiagnostics(validateProject(p));
+    expect([...byNode.get('raw1')!.ports]).toContain('calldata');
+  });
+
+  it('keeps port-kind rules: addresses feed addresses, values feed value slots', () => {
+    const p = project({
+      nodes: [
+        { id: 'raw1', kind: 'rawcall' as const, calldata: '0x' },
+        { id: 'lit', kind: 'literal', literalType: 'uint', literal: '7' },
+        { id: 'send1', kind: 'send' },
+        { id: 'bool', kind: 'literal', literalType: 'bool', literal: 'true' },
+      ],
+      edges: [
+        edge('lit', 'out', 'raw1', 'address'),
+        edge('bool', 'out', 'raw1', 'value'),
+        edge('bool', 'out', 'send1', 'value'),
+        edge('lit', 'out', 'send1', 'address'),
+      ],
+    });
+    const msgs = messages(p);
+    expect(msgs).toContain('Cannot feed address from a value output');
+    expect(msgs).toContain('Cannot feed value (wei) from a bool output');
+  });
+
+  it('a balance feeding a raw call is read — raw statements are reach roots', () => {
+    const p = project({
+      nodes: [
+        { id: 'raw1', kind: 'rawcall', calldata: '0x' },
+        { id: 'bal', kind: 'balance' },
+        { id: 'addr', kind: 'literal', literalType: 'address', literal: ADDRESS },
+      ],
+      edges: [
+        edge('addr', 'out', 'raw1', 'address'),
+        edge('addr', 'out', 'bal', 'address'),
+        edge('bal', 'out', 'raw1', 'value'),
+      ],
+    });
+    expect(messages(p)).toEqual([]);
+  });
+});

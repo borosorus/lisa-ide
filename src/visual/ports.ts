@@ -39,6 +39,14 @@ export function inputPorts(node: GraphNode, project: VisualProject): PortSpec[] 
       ];
     case 'balance':
       return [{ name: 'address', kind: 'address', label: 'address' }];
+    case 'send':
+    case 'rawcall':
+      // Address and value; whether value is required differs at validation —
+      // a Send with nothing to send is an error, a value-less raw call is a call.
+      return [
+        { name: 'address', kind: 'address', label: 'address' },
+        { name: 'value', kind: 'value', label: 'value (wei)' },
+      ];
     case 'guard':
       return [{ name: 'condition', kind: 'condition', label: 'unless' }];
     case 'if':
@@ -85,6 +93,11 @@ export function outputPorts(node: GraphNode, project: VisualProject): PortSpec[]
       return [{ name: 'out', kind: 'value', label: 'balance' }];
     case 'keccak':
       return [{ name: 'out', kind: 'value', label: 'digest' }];
+    // Statements: neither reaches for return data in v1 — no ABI means no
+    // decodable shape, and a raw word would be an untyped read of nothing.
+    case 'send':
+    case 'rawcall':
+      return [];
     case 'guard':
       return [];
     case 'if':

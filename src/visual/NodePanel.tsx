@@ -1,5 +1,5 @@
 import { Box, Button, Stack, Typography } from '@mui/material';
-import { DEFAULT_HASH_DATA, type GraphNode, type GraphNodeDraft, type VisualProject } from './model';
+import { DEFAULT_HASH_DATA, DEFAULT_RAW_CALLDATA, type GraphNode, type GraphNodeDraft, type VisualProject } from './model';
 import { findFunction } from './ports';
 import { tokens } from '../theme/tokens';
 
@@ -28,6 +28,13 @@ export function VisualPalette({ onAdd }: {
       <Button size="small" variant="outlined" title="Revert unless a condition holds (REVERT)"
         onClick={() => onAdd({ kind: 'guard' }, 'guard')}>Guard</Button>
       <Button size="small" variant="outlined" onClick={() => onAdd({ kind: 'if' }, 'if')}>IF</Button>
+    </Stack>
+    <Typography variant="subtitle2" sx={{ mb: 0.5, mt: 1 }}>Transfers / Raw calls</Typography>
+    <Stack direction="row" flexWrap="wrap" gap={0.5}>
+      <Button size="small" variant="outlined" title="Send value to any address from the account running this program (CALL with value)"
+        onClick={() => onAdd({ kind: 'send' }, 'send')}>Send</Button>
+      <Button size="small" variant="outlined" title="Call any address with calldata encoded elsewhere; value is optional (raw calldata CALL)"
+        onClick={() => onAdd({ kind: 'rawcall', calldata: DEFAULT_RAW_CALLDATA }, 'raw')}>Raw call</Button>
     </Stack>
     {/* Port fills carry type; the meaning is otherwise never taught. */}
     <Box className="port-legend" aria-label="Port type colors">
@@ -69,6 +76,13 @@ export function NodeInspector({ node, project }: {
     </Typography>}
     {node.kind === 'keccak' && <Typography variant="body2" color="text.secondary">
       Keccak-256 of {node.data === '0x' ? 'no data' : node.data}, computed once wherever it is used.
+    </Typography>}
+    {node.kind === 'send' && <Typography variant="body2" color="text.secondary">
+      Sends value, in wei, from the account running this program to the address it receives. Both inputs are required.
+    </Typography>}
+    {node.kind === 'rawcall' && <Typography variant="body2" color="text.secondary">
+      Calls the address it receives with exactly {node.calldata === '0x' ? 'no calldata' : node.calldata};
+      an unwired value means nothing is sent with the call.
     </Typography>}
     {node.kind === 'guard' && <Typography variant="body2" color="text.secondary">
       Reverts the program when its condition is false, carrying no revert data.

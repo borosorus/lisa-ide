@@ -126,6 +126,16 @@ function emitScope(
     } else if (node.kind === 'guard') {
       if (depth === 0) push(lines, '');
       lines.push(`${pad}p.revertUnless(${exprOf(ctx, node.id, 'condition')});`);
+    } else if (node.kind === 'send') {
+      // A transfer is a call with empty calldata and a value — exactly what
+      // `p.call(addr, rawCalldata("0x"), v)` means to the builder.
+      if (depth === 0) push(lines, '');
+      lines.push(`${pad}p.call(${exprOf(ctx, node.id, 'address')}, rawCalldata("0x"), ${exprOf(ctx, node.id, 'value')});`);
+    } else if (node.kind === 'rawcall') {
+      if (depth === 0) push(lines, '');
+      const valueFeed = ctx.feed.get(`${node.id}:value`);
+      lines.push(`${pad}p.call(${exprOf(ctx, node.id, 'address')}, rawCalldata("${node.calldata.toLowerCase()}")`
+        + (valueFeed ? `, ${exprOfSource(ctx, valueFeed)}` : '') + ');');
     }
   }
 }

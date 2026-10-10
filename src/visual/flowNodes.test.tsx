@@ -189,3 +189,30 @@ describe('balance, hash, and guard cards', () => {
     expect(patch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('send and raw call cards', () => {
+  it('gives a send its two required inputs and no output', () => {
+    renderNode({ id: 'send1', kind: 'send' }, emptyProject());
+    expect(screen.getByTitle('address (address)')).toBeInTheDocument();
+    expect(screen.getByTitle('value (wei) (value)')).toBeInTheDocument();
+    expect(screen.queryByTitle('balance (out)')).not.toBeInTheDocument();
+  });
+
+  it('commits raw calldata only when it is byte data', () => {
+    const patch = renderNode({ id: 'raw1', kind: 'rawcall', calldata: '0x' }, emptyProject());
+    const input = screen.getByLabelText('Raw calldata') as HTMLInputElement;
+    expect(input.value).toBe('0x');
+    fireEvent.change(input, { target: { value: '0x12345678' } });
+    expect(patch).toHaveBeenCalledWith('raw1', { calldata: '0x12345678' });
+    fireEvent.change(input, { target: { value: '1234' } });
+    expect(patch).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the calldata field when validation flags it', () => {
+    const { container } = renderNode(
+      { id: 'raw1', kind: 'rawcall', calldata: '0x1' }, emptyProject(),
+      { errors: { messages: ['Calldata "0x1" is not 0x-prefixed byte data'], ports: new Set(['calldata']) } },
+    );
+    expect(container.querySelector('.node-row.control.row-invalid')).not.toBeNull();
+  });
+});

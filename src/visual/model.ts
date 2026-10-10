@@ -121,6 +121,9 @@ export type LiteralType = (typeof LITERAL_TYPES)[number];
 /** Byte data a new hash node starts with: valid empty-ish data, one byte. */
 export const DEFAULT_HASH_DATA = '0x00';
 
+/** Byte data a new raw call starts with: empty calldata, a plain call. */
+export const DEFAULT_RAW_CALLDATA = '0x';
+
 /** The single grammar for literal text, shared by validation, UI, and storage. */
 export function isValidLiteral(type: LiteralType, text: string): boolean {
   return type === 'uint' ? /^(0x[0-9a-fA-F]+|\d+)$/.test(text)
@@ -155,6 +158,8 @@ export type GraphNode =
   | (NodeBase & { readonly kind: 'binary'; readonly op: BinaryOp })
   | (NodeBase & { readonly kind: 'balance' })
   | (NodeBase & { readonly kind: 'keccak'; readonly data: string })
+  | (NodeBase & { readonly kind: 'send' })
+  | (NodeBase & { readonly kind: 'rawcall'; readonly calldata: string })
   | (NodeBase & { readonly kind: 'guard' })
   | (NodeBase & { readonly kind: 'if'; readonly hasElse?: boolean });
 

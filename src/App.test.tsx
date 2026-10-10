@@ -405,6 +405,19 @@ describe('App', () => {
     });
   });
 
+  it('creates send and raw call nodes from the palette', async () => {
+    render(<App />);
+    toVisual();
+    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Raw call' }));
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
+      expect(saved.visual.nodes.map((n: { kind: string }) => n.kind)).toEqual(['send', 'rawcall']);
+      expect(saved.visual.nodes[1].calldata).toBe('0x');
+    });
+  });
+
   it('shows graph-level errors without invoking the Worker', async () => {
     render(<App />);
     toVisual();

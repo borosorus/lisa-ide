@@ -600,3 +600,121 @@ return p;`).program);
     expect(() => generateVisualSource(project)).toThrow(/cannot be used outside that block/);
   });
 });
+
+describe('send and raw call nodes', () => {
+  const TARGET = '0x4444444444444444444444444444444444444444';
+
+  function graph(nodes: GraphNode[], edges: GraphEdge[]): VisualProject {
+    return { ...emptyProject(), contracts: [{ id: 'c1', name: 'VAULT', address: VAULT, functions: VAULT_FNS }], nodes, edges };
+  }
+
+  function addressLiteral(id: string, literal: string): GraphNode {
+    return { id, kind: 'literal', literalType: 'address', literal };
+  }
+
+  it('lowers a send to a value-carrying call with empty calldata', () => {
+    const project = graph([
+      { id: 'send1', kind: 'send' },
+      addressLiteral('addr1', TARGET),
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1000' },
+    ], [
+      { id: 'e1', from: { node: 'addr1', port: 'out' }, to: { node: 'send1', port: 'address' } },
+      { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'send1', port: 'value' } },
+    ]);
+    const source = generateVisualSource(project);
+    expect(source).toContain(`p.call("${TARGET}", rawCalldata("0x"), 1000n);`);
+    expect(compileSource(source).program).toBe(compileSource(`const p = createProgram();
+p.call("${TARGET}", rawCalldata("0x"), 1000n);
+return p;`).program);
+  });
+
+  it('sends to a fed address, not just a literal one', () => {
+    const project = graph([
+      { id: 'send1', kind: 'send' },
+      { id: 'caller1', kind: 'context', name: 'CALLER' },
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
+    ], [
+      { id: 'e1', from: { node: 'caller1', port: 'out' }, to: { node: 'send1', port: 'address' } },
+      { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'send1', port: 'value' } },
+    ]);
+    expect(generateVisualSource(project)).toContain('p.call(CALLER, rawCalldata("0x"), 1n);');
+  });
+
+  it('refuses a send with no value — an empty transfer is a mistake, not a call', () => {
+    const project = graph([
+      { id: 'send1', kind: 'send' },
+      addressLiteral('addr1', TARGET),
+    ], [
+      { id: 'e1', from: { node: 'addr1', port: 'out' }, to: { node: 'send1', port: 'address' } },
+    ]);
+    expect(() => generateVisualSource(project)).toThrow(/value \(wei\) is missing an input/);
+  });
+
+  it('lowers a raw call and omits the third argument when nothing feeds value', () => {
+    const project = graph([
+      { id: 'raw1', kind: 'rawcall', calldata: '0x12345678' },
+      addressLiteral('addr1', TARGET),
+    ], [
+      { id: 'e1', from: { node: 'addr1', port: 'out' }, to: { node: 'raw1', port: 'address' } },
+    ]);
+    const source = generateVisualSource(project);
+    expect(source).toContain(`p.call("${TARGET}", rawCalldata("0x12345678"));`);
+    expect(compileSource(source).program).toBe(compileSource(`const p = createProgram();
+p.call("${TARGET}", rawCalldata("0x12345678"));
+return p;`).program);
+  });
+
+  it('carries value with a raw call when the port is fed', () => {
+    const project = graph([
+      { id: 'raw1', kind: 'rawcall', calldata: '0xABCD' },
+      addressLiteral('addr1', TARGET),
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '7' },
+    ], [
+      { id: 'e1', from: { node: 'addr1', port: 'out' }, to: { node: 'raw1', port: 'address' } },
+      { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'raw1', port: 'value' } },
+    ]);
+    const source = generateVisualSource(project);
+    // Calldata text is case-normalized at lowering, like every other literal.
+    expect(source).toContain(`p.call("${TARGET}", rawCalldata("0xabcd"), 7n);`);
+    expect(compileSource(source).program).toBe(compileSource(`const p = createProgram();
+p.call("${TARGET}", rawCalldata("0xabcd"), 7n);
+return p;`).program);
+  });
+
+  it('refuses raw calldata that is not byte data', () => {
+    const project = graph([
+      { id: 'raw1', kind: 'rawcall', calldata: 'nope' },
+      addressLiteral('addr1', TARGET),
+    ], [
+      { id: 'e1', from: { node: 'addr1', port: 'out' }, to: { node: 'raw1', port: 'address' } },
+    ]);
+    expect(() => generateVisualSource(project)).toThrow(/Calldata "nope" is not 0x-prefixed/);
+  });
+
+  it('lowers sends and raw calls inside the branch that owns them', () => {
+    const project = graph([
+      { id: 'gas1', kind: 'context', name: 'GAS' },
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
+      { id: 'cmp1', kind: 'binary', op: 'gt' },
+      { id: 'if1', kind: 'if', hasElse: true },
+      { id: 'send1', kind: 'send', parent: 'if1', branch: 'then' },
+      { id: 'addr1', kind: 'literal', literalType: 'address', literal: TARGET, parent: 'if1', branch: 'then' },
+      { id: 'lit2', kind: 'literal', literalType: 'uint', literal: '5', parent: 'if1', branch: 'then' },
+      { id: 'raw1', kind: 'rawcall', calldata: '0x', parent: 'if1', branch: 'else' },
+      { id: 'self1', kind: 'context', name: 'SELF' },
+    ], [
+      { id: 'e1', from: { node: 'gas1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
+      { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
+      { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+      { id: 'e4', from: { node: 'addr1', port: 'out' }, to: { node: 'send1', port: 'address' } },
+      { id: 'e5', from: { node: 'lit2', port: 'out' }, to: { node: 'send1', port: 'value' } },
+      { id: 'e6', from: { node: 'self1', port: 'out' }, to: { node: 'raw1', port: 'address' } },
+    ]);
+    const source = generateVisualSource(project);
+    const thenBody = source.slice(source.indexOf('p.if('), source.indexOf('}, () => {'));
+    const elseBody = source.slice(source.indexOf('}, () => {'));
+    expect(thenBody).toContain(`p.call("${TARGET}", rawCalldata("0x"), 5n);`);
+    expect(elseBody).toContain('p.call(SELF, rawCalldata("0x"));');
+    expect(() => compileSource(source)).not.toThrow();
+  });
+});

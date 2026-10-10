@@ -95,6 +95,11 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     if (node.kind === 'keccak' && !isBytesHex(node.data)) {
       diagnostics.push({ node: node.id, message: `Hash data "${node.data}" is not 0x-prefixed byte data` });
     }
+    if (node.kind === 'rawcall' && !isBytesHex(node.calldata)) {
+      // The field row is marked through the port set: 'calldata' is a field,
+      // not a port, but the canvas marks either the same way.
+      diagnostics.push({ node: node.id, port: 'calldata', message: `Calldata "${node.calldata}" is not 0x-prefixed byte data` });
+    }
   }
 
   const drivers = new Map<string, number>();
@@ -133,7 +138,7 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     for (const port of inputPorts(node, project)) {
       const count = drivers.get(`${node.id}:${port.name}`) ?? 0;
       if (count > 1) diagnostics.push({ node: node.id, port: port.name, message: `${port.label} has ${count} inputs; connect exactly one` });
-      if (count === 0 && !(node.kind === 'call' && port.name === 'value')) {
+      if (count === 0 && !portIsOptional(node, port.name)) {
         diagnostics.push({ node: node.id, port: port.name, message: `${port.label} is missing an input` });
       }
     }
@@ -153,7 +158,16 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
 }
 
 /** Node kinds whose lowering emits a statement whether or not anything reads them. */
-const EMITTING = new Set<GraphNode['kind']>(['call', 'if', 'guard', 'keccak']);
+const EMITTING = new Set<GraphNode['kind']>(['call', 'if', 'guard', 'keccak', 'send', 'rawcall']);
+
+/**
+ * Input ports that may stay unconnected: the payable value of a call and of a
+ * raw call lower to an omitted third argument. A Send's value is never
+ * optional — an empty transfer is a mistake, not a call.
+ */
+function portIsOptional(node: GraphNode, port: string): boolean {
+  return port === 'value' && (node.kind === 'call' || node.kind === 'rawcall');
+}
 
 /**
  * Nodes an emitted statement actually reaches: start at the nodes that lower

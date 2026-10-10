@@ -64,6 +64,10 @@ export function nodeLabel(node: GraphNode, project: VisualProject): string {
       return 'BALANCE';
     case 'keccak':
       return `KECCAK256(${node.data})`;
+    case 'send':
+      return 'SEND';
+    case 'rawcall':
+      return `RAW CALL(${node.calldata.length > 12 ? `${node.calldata.slice(0, 10)}…` : node.calldata})`;
     case 'guard':
       return 'REVERT UNLESS';
     case 'if':
@@ -153,6 +157,10 @@ export function LisaNode({ id, data }: NodeProps) {
         ariaLabel="Hash data" edit={edit} stop={stop} />
       <Handle type="source" id="out" position={Position.Right}
         className={`port port-value${bad('out') ? ' port-invalid' : ''}`} title="digest (out)" />
+    </div>}
+    {node.kind === 'rawcall' && <div className={`node-row control${bad('calldata') ? ' row-invalid' : ''}`}>
+      <InlineField id={id} value={node.calldata} isValid={isBytesHex} commit={calldata => ({ calldata })}
+        ariaLabel="Raw calldata" edit={edit} stop={stop} />
     </div>}
     {node.kind === 'call' && outputs.map(port => <div className={`node-row right${bad(port.name) ? ' row-invalid' : ''}`} key={port.name}>
       <span className={`port-label${port.connectable === false ? ' unsupported' : ''}`}

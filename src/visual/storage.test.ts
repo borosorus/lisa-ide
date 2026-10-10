@@ -372,3 +372,38 @@ describe('new node kinds', () => {
     expect(parsed.visual.positions).toEqual({ bal1: { x: 3, y: 4 } });
   });
 });
+
+describe('send and raw call persistence', () => {
+  it('round-trips send and rawcall nodes', () => {
+    const project: StoredProject = {
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [],
+        nodes: [
+          { id: 'send1', kind: 'send' },
+          { id: 'raw1', kind: 'rawcall', calldata: '0x12345678' },
+          { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
+        ],
+        edges: [
+          { id: 'e1', from: { node: 'lit1', port: 'out' }, to: { node: 'send1', port: 'value' } },
+          { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'raw1', port: 'value' } },
+        ],
+        positions: { send1: { x: 0, y: 0 } }, frameSizes: {},
+      },
+    };
+    expect(parseStoredProject(JSON.stringify(project)).visual).toEqual(project.visual);
+  });
+
+  it('drops a raw call whose calldata is not byte data', () => {
+    const parsed = parseStoredProject(JSON.stringify({
+      version: 1, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [],
+        nodes: [{ id: 'raw1', kind: 'rawcall', calldata: 'hello' }, { id: 'send1', kind: 'send' }],
+        edges: [], positions: { raw1: { x: 1, y: 2 }, send1: { x: 3, y: 4 } }, frameSizes: {},
+      },
+    }));
+    expect(parsed.visual.nodes.map(n => n.id)).toEqual(['send1']);
+    expect(parsed.visual.positions).toEqual({ send1: { x: 3, y: 4 } });
+  });
+});

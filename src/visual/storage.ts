@@ -217,6 +217,11 @@ function parseNode(value: unknown): GraphNode | null {
     case 'keccak':
       if (typeof value.data !== 'string' || !isBytesHex(value.data)) return null;
       return { ...base, kind: 'keccak', data: value.data };
+    case 'send':
+      return { ...base, kind: 'send' };
+    case 'rawcall':
+      if (typeof value.calldata !== 'string' || !isBytesHex(value.calldata)) return null;
+      return { ...base, kind: 'rawcall', calldata: value.calldata };
     case 'guard':
       return { ...base, kind: 'guard' };
     case 'if':
