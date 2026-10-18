@@ -6,7 +6,8 @@ body { background: var(--lisa-bg); color: var(--lisa-text); }
 .app { min-height: 100vh; display: flex; flex-direction: column; }
 /* Visual mode owns the viewport: panes scroll internally, the page never grows. */
 .app-fixed { height: 100vh; min-height: 0; overflow: hidden; }
-.topbar { padding: 16px 24px 14px; border-bottom: 1px solid var(--lisa-border); }
+.topbar { min-width: 0; padding: 16px 24px 14px; border-bottom: 1px solid var(--lisa-border); }
+.toolbar { padding: 16px 24px 0; }
 .brand-mark { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; background: var(--lisa-primary); color: var(--lisa-on-primary); }
 .workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; flex: 1; min-height: 0; }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 580px; overflow: hidden; border: 1px solid var(--lisa-border); }
@@ -117,15 +118,19 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 }
 .if-enable-else:hover { border-color: var(--lisa-warning); background: rgba(var(--lisa-warning-rgb), 0.14); color: var(--lisa-warning); }
 
-/* Wallet/execution strip: one row shared by both authoring modes, so neither
-   grid changes and the panel never grows into an execution workspace. */
-.wallet-strip { flex: none; padding: 9px 24px; border-radius: 0; border: 0; border-bottom: 1px solid var(--lisa-border); background: var(--lisa-raised); }
+/* Wallet status stays visible in the app header without taking over the page. */
+.wallet-strip { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 7px 10px; border-radius: 10px; background: var(--lisa-raised); }
 .wallet-strip code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--lisa-text-secondary); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* Quiet, consistent scrollbars across panes, code output, and the canvas. */
 * { scrollbar-width: thin; scrollbar-color: var(--lisa-border-strong) transparent; }
 
 @media (max-width: 850px) {
+  .topbar { padding: 14px 16px 12px; flex-wrap: wrap; }
+  .topbar > .wallet-strip { flex: 1 1 100%; }
+  .toolbar { padding: 12px 16px 0; flex-wrap: wrap; }
+  .toolbar > .MuiStack-root:last-child { justify-content: flex-start; }
   .workspace { grid-template-columns: 1fr; }
   .pane { min-height: 420px; }
   .editor { min-height: 340px; }
@@ -137,5 +142,4 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
   .visual-workspace .side-pane { max-height: 50vh; }
   .visual-workspace .output-pane { height: 45vh; }
   .visual-workspace .output-pane.output-collapsed { height: auto; }
-  .wallet-strip { padding: 9px 16px; }
 }

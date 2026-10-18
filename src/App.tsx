@@ -3,6 +3,8 @@ import {
   Box, Button, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
   Snackbar, Stack, Tab, Tabs, ThemeProvider, Typography,
 } from '@mui/material';
+import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
+
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
 import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
@@ -359,6 +361,16 @@ export default function App() {
     <CssBaseline />
     <GlobalStyles styles={cssVarStyles} />
     <Box className={mode === 'visual' ? 'app app-fixed' : 'app'}>
+      <Stack component="header" className="topbar" direction="row" alignItems="center" justifyContent="space-between" gap={2}>
+        <Stack direction="row" alignItems="center" spacing={1.5}>
+          <Box className="brand-mark" aria-hidden="true"><BoltRoundedIcon fontSize="small" /></Box>
+          <Box>
+            <Typography variant="h5" fontWeight={700}>LISA IDE</Typography>
+            <Typography variant="body2" color="text.secondary">Write, compile, and inspect LISA programs</Typography>
+          </Box>
+        </Stack>
+        <WalletExecutionPanel execution={execution} />
+      </Stack>
       <Toolbar
         mode={mode}
         busy={busy}
@@ -366,7 +378,6 @@ export default function App() {
         onCompile={compile}
         onImportFile={file => void importArtifact(file)}
       />
-      <WalletExecutionPanel execution={execution} />
       {mode === 'code' ? <Box className="workspace">
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
