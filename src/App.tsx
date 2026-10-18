@@ -500,8 +500,8 @@ export default function App() {
               {executeSlot}
             </Box>
           </Stack>
-          {/* Collapsed, this bar is the program's whole visible surface — so a
-              dismissed transaction's receipt lives here too, until it is empty. */}
+          {/* Collapsed, this bar is the program's whole visible surface — keep
+              pending and failure details available here after dismissal. */}
           {!outputOpen && <Box sx={{ px: 1.5, pb: 1 }}><ExecuteBlocks execution={execution} /></Box>}
           {outputOpen && <Box className="output-content">{outputPanel}</Box>}
         </Paper>

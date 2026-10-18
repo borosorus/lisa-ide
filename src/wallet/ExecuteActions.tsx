@@ -5,10 +5,8 @@ import type { ExecutionController } from './useWalletExecution';
 
 /**
  * The execution action as its host sees it: the button that requests a
- * review, and the inline fallback for the receipt. Everything the user must
- * verify or watch happens in the centered execution dialog; these pieces
- * render around it. The receipt shows inline exactly while the dialog is
- * not showing it, so it is never rendered twice and never hidden.
+ * review, and the inline fallback for a pending or failed receipt. Final
+ * success stays in the dialog while it is open and does not linger in Output.
  */
 
 /** The button itself; it sits inline in whatever row hosts it. */
@@ -23,9 +21,9 @@ export function ExecuteButton({ execution }: { execution: ExecutionController })
   </Button>;
 }
 
-/** The receipt's inline home: visible only while the dialog is not showing it. */
+/** Pending and failure details survive dismissing the dialog; final success does not linger in Output. */
 export function ExecuteBlocks({ execution }: { execution: ExecutionController }) {
-  if (execution.dialogOpen) return null;
+  if (execution.dialogOpen || execution.phase.kind === 'confirmed') return null;
   return <ReceiptView phase={execution.phase} />;
 }
 

@@ -143,6 +143,47 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 .wallet-strip .MuiButton-outlined { background: var(--lisa-paper); }
 .wallet-strip .MuiButton-outlined:hover { background: var(--lisa-raised); }
 .wallet-strip code { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--lisa-text); }
+.execution-review-field { min-width: 0; padding: 11px 13px; border: 1px solid var(--lisa-border); border-radius: 8px; background: var(--lisa-sunken); }
+.execution-review-label.MuiTypography-root { margin-bottom: 4px; color: var(--lisa-text-muted); font-size: 10px; font-weight: 700; line-height: 1.4; letter-spacing: 0.07em; text-transform: uppercase; }
+.execution-review-value { display: block; margin-bottom: 4px; color: var(--lisa-text); font: 600 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.execution-review-value-pair.MuiTypography-root { color: var(--lisa-text); font-size: 14px; font-weight: 600; line-height: 1.4; }
+.execution-review-value-pair.MuiTypography-root::first-line { color: var(--lisa-text-muted); font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+.execution-review-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--lisa-border); border-radius: 8px; background: var(--lisa-border); }
+.execution-review-meta > div { min-width: 0; padding: 9px 12px; background: var(--lisa-raised); }
+.execution-review-mono.MuiTypography-root { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.execution-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin: 0 24px 8px; padding: 0; list-style: none; }
+.execution-flow-step { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; min-width: 0; color: var(--lisa-text-muted); }
+.execution-flow-step:not(:last-child)::after { content: ''; position: absolute; z-index: 0; height: 1px; left: calc(50% + 15px); right: calc(-50% + 15px); top: 13px; background: var(--lisa-border-strong); }
+.execution-flow-marker { position: relative; z-index: 1; display: grid; flex: 0 0 27px; width: 27px; height: 27px; place-items: center; border: 1px solid var(--lisa-border-strong); border-radius: 50%; background: var(--lisa-paper); color: var(--lisa-text-muted); font-size: 11px; font-weight: 700; }
+.execution-flow-label.MuiTypography-root { color: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.execution-flow-complete { color: var(--lisa-success); }
+.execution-flow-complete .execution-flow-marker { border-color: var(--lisa-success); background: color-mix(in srgb, var(--lisa-success) 12%, var(--lisa-paper)); color: var(--lisa-success); }
+.execution-flow-complete:not(:last-child)::after { background: color-mix(in srgb, var(--lisa-success) 55%, var(--lisa-border)); }
+.execution-flow-current { color: var(--lisa-primary); }
+.execution-flow-current .execution-flow-marker { border: 2px solid var(--lisa-primary); background: color-mix(in srgb, var(--lisa-primary) 10%, var(--lisa-paper)); color: var(--lisa-primary); }
+.execution-flow-error { color: var(--lisa-danger); }
+.execution-flow-error .execution-flow-marker { border-color: var(--lisa-danger); background: color-mix(in srgb, var(--lisa-danger) 10%, var(--lisa-paper)); color: var(--lisa-danger); }
+.transaction-preparing, .transaction-pending { display: flex; align-items: center; gap: 15px; min-width: 0; padding: 18px; border: 1px solid var(--lisa-border); border-radius: 11px; background: var(--lisa-sunken); }
+.transaction-preparing { margin: 7px 0 3px; }
+.transaction-preparing-spinner { display: grid; flex: 0 0 50px; width: 50px; height: 50px; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--lisa-primary) 11%, var(--lisa-paper)); color: var(--lisa-primary); }
+.transaction-preparing .MuiCircularProgress-root, .transaction-pending .MuiCircularProgress-root { color: var(--lisa-primary); }
+.transaction-result-title.MuiTypography-root, .transaction-pending-title.MuiTypography-root { margin: 0 0 3px; color: var(--lisa-text); font-size: 17px; font-weight: 700; line-height: 1.3; }
+.transaction-pending { flex-wrap: wrap; padding: 13px 15px; }
+.transaction-pending > .MuiBox-root:not(.transaction-details) { flex: 1 1 220px; }
+.transaction-pending-inline { gap: 11px; padding: 10px 12px; }
+.transaction-pending-inline .transaction-pending-title.MuiTypography-root { font-size: 14px; }
+.transaction-success-hero { display: flex; align-items: center; gap: 15px; padding: 17px; border: 1px solid color-mix(in srgb, var(--lisa-success) 35%, var(--lisa-border)); border-radius: 11px; background: color-mix(in srgb, var(--lisa-success) 9%, var(--lisa-paper)); }
+.transaction-success-mark { display: grid; flex: 0 0 48px; width: 48px; height: 48px; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--lisa-success) 16%, var(--lisa-paper)); color: var(--lisa-success); }
+.transaction-success-mark .MuiSvgIcon-root { font-size: 30px; }
+.transaction-details { min-width: 0; margin: 0; padding: 12px 14px; border: 1px solid var(--lisa-border); border-radius: 9px; background: var(--lisa-sunken); }
+.transaction-detail { min-width: 0; margin: 0; }
+.transaction-detail-label.MuiTypography-root { display: block; margin: 0 0 5px; color: var(--lisa-text-muted); font-size: 10px; font-weight: 700; line-height: 1.4; letter-spacing: 0.07em; text-transform: uppercase; }
+.transaction-detail-value { display: block; margin: 0; color: var(--lisa-text); font: 600 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.transaction-detail-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--lisa-border); }
+.transaction-detail-meta .transaction-detail-label.MuiTypography-root { margin: 0; }
+.transaction-block-value.MuiTypography-root { display: block; margin: 0; color: var(--lisa-text); font-size: 13px; font-weight: 600; line-height: 1.4; }
+.transaction-alert.MuiAlert-root { align-items: flex-start; border-radius: 10px; }
+.transaction-alert .MuiAlertTitle-root { margin-bottom: 3px; font-weight: 700; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* Quiet, consistent scrollbars across panes, code output, and the canvas. */
@@ -164,6 +205,20 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
   .visual-workspace .side-pane { max-height: 50vh; }
   .visual-workspace .output-pane { height: 45vh; }
   .visual-workspace .output-pane.output-collapsed { height: auto; }
+}
+
+@media (max-width: 500px) {
+  .execution-flow { margin: 0 16px 8px; }
+  .execution-flow-step { gap: 4px; }
+  .execution-flow-marker { flex-basis: 24px; width: 24px; height: 24px; font-size: 10px; }
+  .execution-flow-step:not(:last-child)::after { left: calc(50% + 13px); right: calc(-50% + 13px); top: 12px; }
+  .execution-flow-label.MuiTypography-root { font-size: 10px; }
+  .transaction-preparing { align-items: flex-start; gap: 11px; padding: 14px; }
+  .transaction-preparing-spinner { flex-basis: 40px; width: 40px; height: 40px; }
+  .transaction-result-title.MuiTypography-root { font-size: 16px; }
+  .transaction-success-hero { gap: 11px; padding: 14px; }
+  .transaction-success-mark { flex-basis: 42px; width: 42px; height: 42px; }
+  .transaction-detail-meta { gap: 10px; }
 }
 
 @media (min-width: 851px) and (max-height: 600px) {

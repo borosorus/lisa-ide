@@ -1,7 +1,32 @@
 import { useEffect, useRef } from 'react';
-import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from '@mui/material';
+import { Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from '@mui/material';
 import { ReceiptView } from './ReceiptView';
+import type { TransactionPhase } from './executionState';
 import type { ExecutionController } from './useWalletExecution';
+
+const FLOW_STEPS = ['Review', 'Wallet', 'Receipt'] as const;
+
+function ExecutionFlow({ phase }: { phase: TransactionPhase }) {
+  let activeStep = 0;
+  if (phase.kind === 'awaiting-confirmation') activeStep = 1;
+  if (phase.kind === 'submitted' || phase.kind === 'confirmed') activeStep = 2;
+  if (phase.kind === 'reverted') activeStep = phase.txHash ? 2 : 1;
+  if (phase.kind === 'failed') activeStep = phase.txHash ? 2 : 1;
+  const failed = phase.kind === 'failed' || phase.kind === 'reverted';
+  const failedStep = failed && !phase.txHash ? 1 : 2;
+
+  return <Box component="ol" className="execution-flow" aria-label="Transaction progress">
+    {FLOW_STEPS.map((step, index) => {
+      const isFailed = failed && index === failedStep;
+      const state = isFailed ? 'error' : index < activeStep || phase.kind === 'confirmed' ? 'complete' : index === activeStep ? 'current' : 'upcoming';
+      return <Box component="li" className={`execution-flow-step execution-flow-${state}`} key={step}
+        aria-current={state === 'current' || state === 'error' ? 'step' : undefined}>
+        <Box className="execution-flow-marker">{state === 'complete' ? '✓' : isFailed ? '!' : index + 1}</Box>
+        <Typography component="span" className="execution-flow-label">{step}</Typography>
+      </Box>;
+    })}
+  </Box>;
+}
 
 /**
  * The execution window: the one place a program is verified before it can
@@ -17,9 +42,9 @@ import type { ExecutionController } from './useWalletExecution';
 export function ExecutionDialog({ execution }: { execution: ExecutionController }) {
   const { phase, output, session } = execution;
   const reviewing = phase.kind === 'review';
-  // After broadcast the window becomes optional: closing it hands the receipt
-  // to the inline fallback rather than abandoning anything. While the wallet
-  // popup holds the transaction, closing would hide the only live status.
+  // After broadcast the window becomes optional: pending and failure details
+  // can move inline on close. While the wallet popup holds the transaction,
+  // closing would hide the only live status.
   const dismissible = phase.kind !== 'review' && phase.kind !== 'awaiting-confirmation';
   // Two clicks in one frame would call send() twice before the phase changes;
   // the second review checkpoint is far too late for a broadcast.
@@ -46,34 +71,51 @@ export function ExecutionDialog({ execution }: { execution: ExecutionController 
     maxWidth="sm" fullWidth
   >
     <DialogTitle id="execution-dialog-title">Execute program</DialogTitle>
+    {phase.kind !== 'idle' && <ExecutionFlow phase={phase} />}
     <DialogContent>
-      {reviewing && output !== null && session.account !== null && <Stack spacing={1.25} sx={{ py: 0.5 }}>
-        <Typography variant="overline" color="text.secondary">Destination — the transaction is sent to this account</Typography>
-        <Box component="code" sx={{ overflowWrap: 'anywhere', fontSize: 13 }}>{session.account}</Box>
-        <Typography variant="overline" color="text.secondary">Program hash</Typography>
-        <Box component="code" sx={{ overflowWrap: 'anywhere', fontSize: 13 }}>{output.programHash}</Box>
+      {reviewing && output !== null && session.account !== null && <Stack className="execution-review" spacing={1.25} sx={{ py: 0.5 }}>
         <Typography variant="body2" color="text.secondary">
-          Chain {session.chainId ?? '?'} · {output.byteSize} bytes · executeLisa(bytes) · value 0 wei
+          Review the destination and compiled program. Your wallet will ask you to approve before anything is sent.
         </Typography>
+        <Box className="execution-review-field">
+          <Typography component="div" className="execution-review-label">Destination account</Typography>
+          <Box component="code" className="execution-review-value">{session.account}</Box>
+          <Typography variant="caption" color="text.secondary" display="block">The transaction executes through this account.</Typography>
+        </Box>
+        <Box className="execution-review-field">
+          <Typography component="div" className="execution-review-label">Program hash</Typography>
+          <Box component="code" className="execution-review-value">{output.programHash}</Box>
+        </Box>
+        <Box className="execution-review-meta">
+          <Box><Typography component="div" className="execution-review-label">Network</Typography><Typography variant="body2">Chain {session.chainId ?? '?'}</Typography></Box>
+          <Box><Typography component="div" className="execution-review-label">Payload</Typography><Typography variant="body2">{output.byteSize} bytes</Typography></Box>
+          <Box><Typography component="div" className="execution-review-label">Method</Typography><Typography variant="body2" className="execution-review-mono">executeLisa(bytes)</Typography></Box>
+          <Box><Typography component="div" className="execution-review-value-pair">Value <br />0 wei</Typography></Box>
+        </Box>
       </Stack>}
       {phase.kind === 'awaiting-confirmation' && (
-        <Alert severity="info" sx={{ my: 0.5 }}>Confirm the transaction in your wallet. Nothing is broadcast until you do.</Alert>
+        <Box className="transaction-preparing" role="status">
+          <Box className="transaction-preparing-spinner"><CircularProgress size={30} thickness={4} aria-label="Waiting for wallet approval" /></Box>
+          <Box>
+            <Typography component="h2" className="transaction-result-title">Waiting for wallet approval</Typography>
+            <Typography variant="body2" color="text.secondary">We’re checking your wallet and network. Review and approve the request in your wallet when it appears. Nothing is broadcast until then.</Typography>
+          </Box>
+        </Box>
       )}
-      {dismissible && <ReceiptView phase={phase} />}
+      {dismissible && <ReceiptView phase={phase} presentation="dialog" />}
       {phase.kind === 'submitted' && (
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-          Waiting for the receipt — it will also stay visible here if you close this window.
+          You can close this dialog. Receipt tracking continues in the Output pane.
         </Typography>
       )}
     </DialogContent>
-    <DialogActions sx={{ px: 3, pb: 2 }}>
+    {(reviewing || dismissible) && <DialogActions sx={{ px: 3, pb: 2 }}>
       {reviewing && <>
         {/* Focus sits on the way out, not on the irreversible button. */}
         <Button onClick={execution.cancelReview} autoFocus>Cancel</Button>
         <Button color="secondary" variant="contained" onClick={confirm}>Confirm and send</Button>
       </>}
-      {phase.kind === 'awaiting-confirmation' && <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto' }}>Waiting for the wallet…</Typography>}
-      {dismissible && <Button onClick={() => execution.dismiss()} autoFocus>Close</Button>}
-    </DialogActions>
+      {dismissible && <Button color="primary" variant="contained" onClick={() => execution.dismiss()} autoFocus>Close</Button>}
+    </DialogActions>}
   </Dialog>;
 }

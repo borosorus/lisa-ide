@@ -62,8 +62,8 @@ export interface ExecutionController {
   cancelReview(): void;
   /**
    * Close the review window without abandoning the transaction. Purely visual:
-   * receipt tracking lives in the controller, so dismissing shows the receipt
-   * inline instead of in the dialog, never hides it.
+   * receipt tracking lives in the controller, so pending and failure details
+   * remain available inline after dismissal. Confirmed success stays dialog-only.
    */
   dismiss(): void;
   /** True while the execution dialog should be on screen. */

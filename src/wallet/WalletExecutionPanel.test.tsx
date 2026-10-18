@@ -529,7 +529,8 @@ describe('WalletExecutionPanel', () => {
     expect(screen.getAllByText('Submitted')).toHaveLength(1);
     expect(screen.getByText(hash)).toBeInTheDocument();
     releaseWait({ status: 1, blockNumber: 42 });
-    await screen.findByText('block 42');
+    await waitFor(() => expect(screen.queryByText('Submitted')).not.toBeInTheDocument());
+    expect(screen.queryByText('block 42')).not.toBeInTheDocument();
   });
 
   it('keeps the transaction status visible when a compile lands mid-confirmation', async () => {
