@@ -51,7 +51,7 @@ const DEFAULT_STORED = { version: 1 as const, mode: 'code' as AuthoringMode, cod
 /** Pane heading: a quiet icon carrying the eye to what the pane is for. */
 function PaneTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
   return <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-    <Box aria-hidden="true" sx={{ display: 'flex', color: 'text.secondary', '& svg': { fontSize: 18 } }}>{icon}</Box>
+    <Box className="pane-title-icon" aria-hidden="true">{icon}</Box>
     <Typography variant="subtitle2" noWrap>{children}</Typography>
   </Stack>;
 }

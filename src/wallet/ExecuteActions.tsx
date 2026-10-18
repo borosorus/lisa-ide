@@ -17,7 +17,7 @@ export function ExecuteButton({ execution }: { execution: ExecutionController })
   // While a transaction is live the dialog owns the narration; a second
   // send would race the first, so the row says where things stand instead.
   if (phase.kind === 'awaiting-confirmation' || phase.kind === 'submitted') return null;
-  return <Button size="small" variant="contained" disabled={!execution.canExecute}
+  return <Button size="small" color="secondary" variant="contained" disabled={!execution.canExecute}
     title={describeGate(execution.gate)} onClick={execution.review}>
     Execute program
   </Button>;

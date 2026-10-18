@@ -70,7 +70,7 @@ export function ExecutionDialog({ execution }: { execution: ExecutionController 
       {reviewing && <>
         {/* Focus sits on the way out, not on the irreversible button. */}
         <Button onClick={execution.cancelReview} autoFocus>Cancel</Button>
-        <Button variant="contained" onClick={confirm}>Confirm and send</Button>
+        <Button color="secondary" variant="contained" onClick={confirm}>Confirm and send</Button>
       </>}
       {phase.kind === 'awaiting-confirmation' && <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto' }}>Waiting for the wallet…</Typography>}
       {dismissible && <Button onClick={() => execution.dismiss()} autoFocus>Close</Button>}

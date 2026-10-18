@@ -1,6 +1,7 @@
 import { init } from '@web3-onboard/react';
 import injectedModule from '@web3-onboard/injected-wallets';
 import type { InitOptions, OnboardAPI } from '@web3-onboard/core';
+import { tokens } from '../theme/tokens';
 
 /**
  * Web3-Onboard setup. Initialization is memoized and lazy: it runs
@@ -33,6 +34,16 @@ export function getOnboard(): OnboardAPI {
       description: 'Compile and execute LISA programs through a LisaAccount (EIP-7702).',
       recommendedInjectedWallets: [{ name: 'MetaMask', url: 'https://metamask.io' }],
     },
+    theme: {
+      '--w3o-background-color': tokens.surface.paper,
+      '--w3o-foreground-color': tokens.surface.sunken,
+      '--w3o-text-color': tokens.text.primary,
+      '--w3o-border-color': tokens.border.subtle,
+      '--w3o-action-color': tokens.accent.primary,
+      '--w3o-border-radius': '10px',
+      '--w3o-font-family': 'Inter, system-ui, sans-serif',
+    },
+    disableFontDownload: true,
     // The app renders its own compact session row (§7), so Onboard's floating
     // account center stays off.
     accountCenter: { desktop: { enabled: false }, mobile: { enabled: false } },

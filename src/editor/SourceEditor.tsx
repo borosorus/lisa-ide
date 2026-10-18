@@ -9,11 +9,7 @@ import { tags as t } from '@lezer/highlight';
 import type { CompileDiagnostic } from '../compile/types';
 import { tokens } from '../theme/tokens';
 
-/**
- * `basicSetup` bundles a highlight style tuned for light backgrounds; on the
- * sunken surface most of its roles fall below AA. This overrides every role
- * this grammar produces, from tokens (each >=4.5:1 on `surface.sunken`).
- */
+/** Explicit syntax colors keep language roles distinct and readable on the light editor surface. */
 const syntaxTheme = HighlightStyle.define([
   { tag: [t.keyword, t.controlKeyword, t.operatorKeyword], color: tokens.syntax.keyword, fontWeight: '600' },
   { tag: [t.comment], color: tokens.syntax.comment, fontStyle: 'italic' },
@@ -22,7 +18,7 @@ const syntaxTheme = HighlightStyle.define([
   { tag: [t.bool, t.null], color: tokens.syntax.bool },
   { tag: [t.typeName, t.className, t.namespace], color: tokens.syntax.type },
   { tag: [t.propertyName], color: tokens.text.secondary },
-  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: tokens.accent.primary },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: tokens.syntax.function },
   { tag: [t.variableName, t.definition(t.variableName)], color: tokens.text.primary },
   { tag: [t.operator, t.punctuation, t.separator, t.bracket], color: tokens.syntax.punctuation },
   { tag: [t.meta], color: tokens.text.muted },
@@ -124,11 +120,28 @@ export const SourceEditor = forwardRef<SourceEditorHandle, {
             '&': { height: '100%', fontSize: '14px', backgroundColor: tokens.surface.sunken, color: tokens.text.primary },
             '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
             '.cm-gutters': { backgroundColor: tokens.surface.sunken, color: tokens.text.muted, border: 'none' },
-            '.cm-activeLine': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.07)` },
-            '.cm-activeLineGutter': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.07)` },
+            '.cm-activeLine': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.04)` },
+            '.cm-activeLineGutter': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.04)` },
             '.cm-cursor': { borderLeftColor: tokens.accent.primary },
-            '.cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.28) !important` },
-            '.cm-lisa-error-line': { backgroundColor: `rgba(${tokens.status.dangerRgb}, 0.12)` },
+            '.cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.06) !important` },
+            '&.cm-focused .cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.08) !important` },
+            '.cm-placeholder': { color: tokens.text.muted },
+            '.cm-tooltip': {
+              backgroundColor: tokens.surface.paper,
+              color: tokens.text.primary,
+              border: `1px solid ${tokens.border.strong}`,
+              borderRadius: '8px',
+              boxShadow: `0 8px 24px rgba(${tokens.text.primaryRgb}, 0.14)`,
+            },
+            '.cm-tooltip-autocomplete ul li': { color: tokens.text.primary, padding: '3px 8px' },
+            '.cm-tooltip-autocomplete ul li[aria-selected]': {
+              color: tokens.accent.primary,
+              backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.12)`,
+            },
+            '.cm-completionMatched': { color: tokens.accent.secondary, fontWeight: '700' },
+            // Keep the diagnostic visible without tinting the code beneath
+            // selections; the character underline and narrow line marker do that.
+            '.cm-lisa-error-line': { boxShadow: `inset 3px 0 0 rgba(${tokens.status.dangerRgb}, 0.72)` },
             '.cm-lisa-error-char': { textDecoration: `underline wavy ${tokens.status.danger}`, textUnderlineOffset: '3px' },
           }),
         ],
