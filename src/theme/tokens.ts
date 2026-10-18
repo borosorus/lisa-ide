@@ -10,20 +10,20 @@
  */
 export const tokens = {
   surface: {
-    background: '#F2F6F4',
-    paper: '#FFFFFF',
-    sunken: '#EDF3F2',
-    raised: '#F8FBFA',
-    disabled: '#E5ECE9',
+    background: '#E9F0ED',
+    paper: '#FAFCFB',
+    sunken: '#E3EBE8',
+    raised: '#F0F5F3',
+    disabled: '#DCE5E2',
     tooltip: '#1C3036',
     /** Slightly lifted paper for hover and selected fills. */
     hover: 'rgba(8, 115, 111, 0.08)',
   },
   border: {
     /** Decorative separators; not load-bearing for meaning. */
-    subtle: '#D6E1DE',
+    subtle: '#CBD8D4',
     /** Outlines of interactive things and the canvas grid. */
-    strong: '#718784',
+    strong: '#70827F',
   },
   text: {
     primary: '#1C3036',
@@ -59,7 +59,7 @@ export const tokens = {
     keyword: '#135B92',
     comment: '#4D6268',
     string: '#216B3B',
-    number: '#8A5900',
+    number: '#825400',
     type: '#00645F',
     bool: '#A23D36',
     function: '#066A65',
@@ -70,7 +70,7 @@ export const tokens = {
     value: '#1875B8',
     address: '#267747',
     bool: '#B3423B',
-    condition: '#8A5900',
+    condition: '#825400',
     blocked: '#71888C',
   },
   edge: {

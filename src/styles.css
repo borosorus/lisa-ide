@@ -138,8 +138,11 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 .if-enable-else:hover { border-color: var(--lisa-warning); background: rgba(var(--lisa-warning-rgb), 0.14); color: var(--lisa-warning); }
 
 /* Wallet status stays visible in the app header without taking over the page. */
-.wallet-strip { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 7px 10px; border-radius: 10px; background: var(--lisa-raised); }
-.wallet-strip code { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--lisa-text-secondary); }
+.wallet-strip.MuiPaper-root { flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 7px 10px; border-radius: 10px; border-color: rgba(var(--lisa-primary-rgb), 0.48); background: var(--lisa-sunken); box-shadow: 0 3px 12px rgba(var(--lisa-text-rgb), 0.1); }
+.wallet-strip .MuiTypography-overline { color: var(--lisa-primary); font-weight: 700; }
+.wallet-strip .MuiButton-outlined { background: var(--lisa-paper); }
+.wallet-strip .MuiButton-outlined:hover { background: var(--lisa-raised); }
+.wallet-strip code { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--lisa-text); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* Quiet, consistent scrollbars across panes, code output, and the canvas. */
