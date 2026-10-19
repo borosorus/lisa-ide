@@ -114,15 +114,20 @@ npm run build
 
 ## Authoring source
 
-Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser, and the Source header includes a few small examples that can replace the draft.
+Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser, and the Source header includes ready-to-adapt examples for token transfers, fallible calls, swaps, claims, native payments, and pre-encoded calldata.
 
 ```js
 const p = createProgram();
+// Replace with an ERC-20 address on the target chain. Amounts use token base units.
 const token = "0x1111111111111111111111111111111111111111";
-const vault = "0x2222222222222222222222222222222222222222";
+const feeRecipient = "0x2222222222222222222222222222222222222222";
+const payout = 1000000n;
+const fee = payout.div(100n);
+const total = payout.add(fee);
 const balance = p.staticCall(token, encodeCall("balanceOf(address)", [SELF])).uint256();
-p.if(balance.gt(1000n), () => {
-  p.call(vault, encodeCall("deposit(uint256)", [balance]));
+p.if(balance.gt(total.sub(1n)), () => {
+  p.call(token, encodeCall("transfer(address,uint256)", [CALLER, payout]));
+  p.call(token, encodeCall("transfer(address,uint256)", [feeRecipient, fee]));
 });
 return p;
 ```
@@ -142,7 +147,9 @@ written as `0x` hex and costs one slot — a digest is a word, so pass it to a
 compile-time constant.
 `tryCall` and `tryStaticCall` continue on failure and return a result whose `.success`
 property is a condition value. Decode a result only in its success branch, before another call
-replaces its return data.
+replaces its return data. Code-mode compilation also warns when a try-call decoder is outside the
+recognized `p.if(result.success, then)` or `p.revertUnless(result.success)` guards; these warnings
+are advisory because the restricted source analyzer does not infer arbitrary JavaScript control flow.
 Source supports `const` bindings,
 strings, numbers, bigints, booleans, arrays, calls, zero-argument block callbacks
 for `p.if`, and a final `return p;`. It does not support imports, type annotations,
