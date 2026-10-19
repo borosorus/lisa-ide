@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box, Button, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
-  Snackbar, Stack, Tab, Tabs, ThemeProvider, Typography,
+  Snackbar, Stack, Tab, Tabs, ThemeProvider, Tooltip, Typography,
 } from '@mui/material';
 import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
@@ -13,9 +14,11 @@ import TerminalRoundedIcon from '@mui/icons-material/TerminalRounded';
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
 import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded';
+import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { SourceEditor, type SourceEditorHandle } from './editor/SourceEditor';
 import { SOURCE_EXAMPLES, STARTER_SOURCE } from './editor/examples';
+import { VISUAL_EXAMPLES, type VisualExample } from './visual/examples';
 import { CompilerClient, CompilerError } from './compile/client';
 import { createArtifact, parseArtifact, type ProgramArtifact } from './compile/artifact';
 import type { CompileDiagnostic, CompileOutput } from './compile/types';
@@ -23,13 +26,13 @@ import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas, type CanvasApi } from './visual/VisualCanvas';
 import {
-  addContract, addNode, connectPort, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes, setCallFailureMode,
+  addContract, addNode, connectPort, duplicateNode, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes, resetCanvas, setCallFailureMode,
   setNodeFrameSize, updateContract, updateNode,
 } from './visual/projectState';
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type ScopeTarget, type Vec2, type VisualProject } from './visual/model';
 import { NodeInspector, VisualPalette } from './visual/NodePanel';
 import { nodeSize, spawnPosition } from './visual/spawnPosition';
-import { occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containment';
+import { effectiveSize, occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containment';
 import { validateProject } from './visual/validate';
 import { loadStoredProject, saveStoredProject, type AuthoringMode } from './visual/storage';
 import { WalletExecutionPanel } from './wallet/WalletExecutionPanel';
@@ -73,11 +76,12 @@ export default function App() {
   // the node selection; never persisted, never read by lowering.
   const [selectedBranch, setSelectedBranch] = useState<{ nodeId: string; branch: 'then' | 'else' } | null>(null);
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
+  const [visualCanvasKey, setVisualCanvasKey] = useState(0);
   const [libraryTab, setLibraryTab] = useState(0);
   const [libraryOpen, setLibraryOpen] = useState(true);
   // One-deep, single-slot undo for graph deletions: a hand-built graph can lose
   // minutes of wiring to one Delete keypress, and that keystroke is silent.
-  const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string } | null>(null);
+  const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string; refitOnUndo?: boolean } | null>(null);
   // Lets a deletion's own editVisual pass through without voiding the slot it just filled.
   const keepUndoSlot = useRef(false);
   // Visual mode gives the canvas the space: Output starts collapsed there.
@@ -118,6 +122,17 @@ export default function App() {
     // An empty notice means "keep whatever explanation is showing"; an
     // explicit one (a loaded example) replaces it.
     if (nextNotice !== '') setNotice(nextNotice);
+  }
+
+  function loadVisualExample(example: VisualExample) {
+    setSelectedId(null);
+    setSelectedEdgeId(null);
+    setSelectedBranch(null);
+    setFocusNodeId(null);
+    keepUndoSlot.current = false;
+    editVisual(example.createProject());
+    setVisualCanvasKey(key => key + 1);
+    setNotice(`Loaded visual example: ${example.label}`);
   }
 
   function invalidateOutput() {
@@ -220,6 +235,64 @@ export default function App() {
     editVisual(p => placeNode(p, { id, kind: 'call', contractId, signature }));
   }
 
+  function duplicateSelectedNode() {
+    const source = project.nodes.find(node => node.id === selectedId);
+    if (!source) return;
+    const sourcePosition = project.positions[source.id] ?? viewportCenter();
+    const size = effectiveSize(project, source);
+    const anchor = {
+      x: sourcePosition.x + size.width + 32 + size.width / 2,
+      y: sourcePosition.y + size.height / 2,
+    };
+    let position: Vec2;
+    if (source.parent !== undefined) {
+      const placement = spawnInsideIf({
+        project,
+        frameId: source.parent,
+        branch: source.branch ?? 'then',
+        size,
+        anchor,
+      });
+      if (!placement) {
+        setNotice('Could not find room to duplicate this node inside its branch.');
+        return;
+      }
+      position = placement.position;
+    } else {
+      position = spawnPosition({
+        anchor,
+        size,
+        occupied: occupiedRects(project),
+        bounds: canvasApi.current?.viewportRect() ?? null,
+      });
+    }
+    const duplicated = duplicateNode(project, source.id, position);
+    if (!duplicated) return;
+    editVisual(duplicated.project);
+    setSelectedId(duplicated.nodeId);
+    setSelectedEdgeId(null);
+    setSelectedBranch(null);
+    setFocusNodeId(source.parent === undefined ? duplicated.nodeId : null);
+    setUndo({ snapshot: project, message: duplicated.externalTryResultsOmitted
+      ? 'IF duplicated; try-call results need rewiring' : 'Node duplicated' });
+    setNotice(duplicated.externalTryResultsOmitted
+      ? 'Duplicated the IF block. Wire its try-call result inputs to a try-call inside the copied block.'
+      : source.kind === 'if' ? 'Duplicated the IF block and its nested contents.' : 'Duplicated the selected node.');
+  }
+
+  function resetVisualCanvas() {
+    if (project.nodes.length === 0) return;
+    const snapshot = project;
+    editVisual(resetCanvas(project));
+    setSelectedId(null);
+    setSelectedEdgeId(null);
+    setSelectedBranch(null);
+    setFocusNodeId(null);
+    setVisualCanvasKey(key => key + 1);
+    setUndo({ snapshot, message: 'Canvas reset', refitOnUndo: true });
+    setNotice('Canvas reset. Contract resources remain available.');
+  }
+
   function changeCallFailureMode(callId: string, mode: 'revert' | 'continue'): string | undefined {
     const call = project.nodes.find(node => node.id === callId);
     if (!call || !['call', 'rawcall', 'send'].includes(call.kind)) return;
@@ -256,9 +329,15 @@ export default function App() {
 
   /** Restore the deleted graph; any compiled output was already invalidated. */
   function undoDelete() {
-    const snapshot = undo?.snapshot;
+    const entry = undo;
     setUndo(null);
-    if (snapshot) editVisual(snapshot);
+    if (!entry) return;
+    editVisual(entry.snapshot);
+    setSelectedId(null);
+    setSelectedEdgeId(null);
+    setSelectedBranch(null);
+    setFocusNodeId(null);
+    if (entry.refitOnUndo) setVisualCanvasKey(key => key + 1);
   }
 
   function deleteNodes(ids: string[]) {
@@ -416,27 +495,22 @@ export default function App() {
         <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
             <PaneTitle icon={<DescriptionRoundedIcon />}>Source</PaneTitle>
-            <Stack direction="row" alignItems="center" gap={1}>
-              <Select
-                size="small"
-                value=""
-                displayEmpty
-                aria-label="Load example"
-                onChange={event => {
-                  const example = SOURCE_EXAMPLES.find(candidate => candidate.id === event.target.value);
-                  if (example) replaceSource(example.source, `Loaded example: ${example.label}`);
-                }}
-                sx={{ minWidth: 170 }}
-              >
-                <MenuItem value="" disabled>Load example…</MenuItem>
-                {SOURCE_EXAMPLES.map(example => (
-                  <MenuItem key={example.id} value={example.id}>{example.label}</MenuItem>
-                ))}
-              </Select>
-              <Typography variant="caption" component="span" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                Compile with <kbd>Ctrl/⌘ + Enter</kbd>
-              </Typography>
-            </Stack>
+            <Select
+              size="small"
+              value=""
+              displayEmpty
+              aria-label="Load example"
+              onChange={event => {
+                const example = SOURCE_EXAMPLES.find(candidate => candidate.id === event.target.value);
+                if (example) replaceSource(example.source, `Loaded example: ${example.label}`);
+              }}
+              sx={{ minWidth: 170 }}
+            >
+              <MenuItem value="" disabled>Load example…</MenuItem>
+              {SOURCE_EXAMPLES.map(example => (
+                <MenuItem key={example.id} value={example.id}>{example.label}</MenuItem>
+              ))}
+            </Select>
           </Stack>
           <SourceEditor
             ref={editorRef}
@@ -455,8 +529,38 @@ export default function App() {
         </Paper>
       </Box> : <Box className={`visual-workspace${libraryOpen ? '' : ' library-collapsed'}`}>
         <Paper className="pane canvas-pane" elevation={0}>
-          <Box className="pane-heading"><PaneTitle icon={<DashboardRoundedIcon />}>Canvas</PaneTitle></Box>
+          <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
+            <PaneTitle icon={<DashboardRoundedIcon />}>Canvas</PaneTitle>
+            <Stack direction="row" alignItems="center" gap={0.75}>
+              <Select
+                size="small"
+                value=""
+                displayEmpty
+                aria-label="Load visual example"
+                onChange={event => {
+                  const example = VISUAL_EXAMPLES.find(candidate => candidate.id === event.target.value);
+                  if (example) loadVisualExample(example);
+                }}
+                sx={{ minWidth: 190, maxWidth: '42%' }}
+              >
+                <MenuItem value="" disabled>Load example…</MenuItem>
+                {VISUAL_EXAMPLES.map(example => (
+                  <MenuItem key={example.id} value={example.id} title={example.description}>{example.label}</MenuItem>
+                ))}
+              </Select>
+              <Tooltip title="Clear nodes and wiring; keep contract resources">
+                <span>
+                  <Button size="small" variant="outlined" color="warning" startIcon={<RestartAltRoundedIcon />}
+                    disabled={project.nodes.length === 0}
+                    onClick={resetVisualCanvas}>
+                    Reset canvas
+                  </Button>
+                </span>
+              </Tooltip>
+            </Stack>
+          </Stack>
           <VisualCanvas
+            key={visualCanvasKey}
             canvasApi={canvasApi}
             project={project}
             onMoveNodes={moveNodes}
@@ -510,7 +614,18 @@ export default function App() {
                 <VisualPalette onAdd={addVisualNode} />
               )}
               <Box className="side-section">
-                <Typography variant="subtitle2">Selected node</Typography>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+                  <Typography variant="subtitle2">Selected node</Typography>
+                  <Tooltip title="Duplicate the selected node or IF block">
+                    <span>
+                      <Button size="small" variant="outlined" startIcon={<ContentCopyRoundedIcon />}
+                        disabled={!project.nodes.some(node => node.id === selectedId)}
+                        onClick={duplicateSelectedNode}>
+                        Duplicate
+                      </Button>
+                    </span>
+                  </Tooltip>
+                </Stack>
                 <Box sx={{ mt: 0.5 }}>
                   <NodeInspector
                     node={project.nodes.find(n => n.id === selectedId) ?? null}

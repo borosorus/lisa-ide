@@ -114,7 +114,7 @@ npm run build
 
 ## Authoring source
 
-Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser, and the Source header includes ready-to-adapt examples for token transfers, fallible calls, swaps, claims, native payments, and pre-encoded calldata.
+Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser. The Source header includes ready-to-adapt code examples, and the Canvas header includes loadable visual graphs for token checks, try-call fallbacks, native payments, hashing, and raw calldata.
 
 ```js
 const p = createProgram();

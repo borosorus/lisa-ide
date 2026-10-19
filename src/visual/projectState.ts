@@ -2,7 +2,8 @@ import {
   clampFrameSize, createId, IF_DEFAULT_SIZE,
   type ContractResource, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type ScopeTarget, type Vec2, type VisualProject,
 } from './model';
-import { expandIfFrames } from './containment';
+import { descendants, expandIfFrames } from './containment';
+import { tryOutputGates } from './validate';
 
 /**
  * Pure VisualProject transitions. Every edit to semantic data lives here so
@@ -43,6 +44,114 @@ export function addNode(
   };
   // Adding inside a frame may require the frame to grow around its new member.
   return expandIfFrames(added);
+}
+
+/** Clear the graph while keeping imported contract resources available. */
+export function resetCanvas(project: VisualProject): VisualProject {
+  return { ...project, nodes: [], edges: [], positions: {}, frameSizes: {} };
+}
+
+/**
+ * Duplicate one node, or an IF and its nested contents. Input edges into the
+ * copied group are cloned so the copy keeps its inputs; output edges leaving
+ * the group stay with the original to avoid silently rewiring consumers.
+ */
+export function duplicateNode(
+  project: VisualProject,
+  sourceId: string,
+  position: Vec2,
+): { project: VisualProject; nodeId: string; externalTryResultsOmitted: boolean } | null {
+  const source = project.nodes.find(node => node.id === sourceId);
+  if (!source) return null;
+
+  const copiedIds = new Set([sourceId, ...(source.kind === 'if' ? descendants(project, sourceId) : [])]);
+  const originals = project.nodes.filter(node => copiedIds.has(node.id));
+  const idMap = new Map<string, string>();
+  const usedNodeIds = project.nodes.map(node => node.id);
+  for (const node of originals) {
+    const id = createId(usedNodeIds, 'dup');
+    usedNodeIds.push(id);
+    idMap.set(node.id, id);
+  }
+
+  const sourcePosition = project.positions[sourceId] ?? { x: 0, y: 0 };
+  const delta = { x: position.x - sourcePosition.x, y: position.y - sourcePosition.y };
+  const cloneNode = (node: GraphNode): GraphNode => {
+    const id = idMap.get(node.id)!;
+    const parent = node.parent === undefined ? undefined : idMap.get(node.parent) ?? node.parent;
+    let clone = {
+      ...node,
+      id,
+      ...(parent === undefined ? {} : { parent }),
+    } as GraphNode;
+    if (node.parent !== undefined && parent === undefined) {
+      const { parent: _parent, branch: _branch, ...unscoped } = clone;
+      clone = unscoped as GraphNode;
+    }
+    if (clone.kind === 'if' && clone.autoSuccessFor !== undefined) {
+      const owner = idMap.get(clone.autoSuccessFor);
+      if (owner !== undefined) clone = { ...clone, autoSuccessFor: owner };
+      else {
+        const { autoSuccessFor: _owner, ...manual } = clone;
+        clone = manual;
+      }
+    }
+    return clone;
+  };
+  const copiedNodes = originals.map(cloneNode);
+  const nodesById = new Map(project.nodes.map(node => [node.id, node] as const));
+  const tryGates = tryOutputGates(project);
+  // A decoded try-call result belongs to one success IF. When that IF is
+  // duplicated without its producing call, sharing the external result edges
+  // would split consumers across two gates and invalidate the original graph.
+  const externalTryCalls = new Set(project.edges.flatMap(edge => {
+    if (!copiedIds.has(edge.to.node) || edge.to.port !== 'condition' || edge.from.port !== 'success'
+        || copiedIds.has(edge.from.node)) return [];
+    const owner = nodesById.get(edge.from.node);
+    return owner?.kind === 'call' && tryGates.get(owner.id) === edge.to.node ? [owner.id] : [];
+  }));
+  let externalTryResultsOmitted = false;
+  const usedEdgeIds = project.edges.map(edge => edge.id);
+  const copiedEdges = project.edges
+    .filter(edge => {
+      if (!copiedIds.has(edge.to.node)) return false;
+      const owner = nodesById.get(edge.from.node);
+      if (owner?.kind === 'call' && externalTryCalls.has(owner.id) && /^out:\d+$/.test(edge.from.port)) {
+        externalTryResultsOmitted = true;
+        return false;
+      }
+      return true;
+    })
+    .map(edge => {
+      const id = createId(usedEdgeIds, 'e');
+      usedEdgeIds.push(id);
+      return {
+        id,
+        from: { ...edge.from, node: idMap.get(edge.from.node) ?? edge.from.node },
+        to: { ...edge.to, node: idMap.get(edge.to.node)! },
+      };
+    });
+  const positions = { ...project.positions };
+  for (const node of originals) {
+    const id = idMap.get(node.id)!;
+    const at = project.positions[node.id] ?? { x: 0, y: 0 };
+    positions[id] = { x: at.x + delta.x, y: at.y + delta.y };
+  }
+  positions[idMap.get(sourceId)!] = position;
+  const frameSizes = { ...project.frameSizes };
+  for (const node of originals) {
+    if (node.kind !== 'if') continue;
+    const size = project.frameSizes[node.id];
+    if (size) frameSizes[idMap.get(node.id)!] = { ...size };
+  }
+  const next: VisualProject = {
+    ...project,
+    nodes: [...project.nodes, ...copiedNodes],
+    edges: [...project.edges, ...copiedEdges],
+    positions,
+    frameSizes,
+  };
+  return { project: expandIfFrames(next), nodeId: idMap.get(sourceId)!, externalTryResultsOmitted };
 }
 
 /**
