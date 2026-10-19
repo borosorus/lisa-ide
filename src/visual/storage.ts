@@ -7,6 +7,7 @@ import {
 import { canonicalInputType, isValidAddress } from './abi';
 import { isBytesHex } from '../compile/hex';
 import type { ContractFunction, ContractResource } from './model';
+import { migrateEmbeddedElse } from './migrateEmbeddedElse';
 
 /**
  * Versioned project persistence. A malformed save must never brick the app:
@@ -18,7 +19,7 @@ export const PROJECT_STORAGE_KEY = 'lisa-ide.project.v1';
 export type AuthoringMode = 'code' | 'visual';
 
 export interface StoredProject {
-  readonly version: 1;
+  readonly version: 1 | 2;
   readonly mode: AuthoringMode;
   readonly codeSource: string | null;
   readonly visual: VisualProject;
@@ -53,7 +54,7 @@ export function loadStoredProject(
     raw = storage.getItem(PROJECT_STORAGE_KEY);
     if (raw === null) {
       const legacy = storage.getItem(SOURCE_STORAGE_KEY);
-      return legacy === null ? null : { version: 1, mode: 'code', codeSource: legacy, visual: emptyProject() };
+      return legacy === null ? null : { version: 2, mode: 'code', codeSource: legacy, visual: emptyProject() };
     }
   } catch {
     return null;
@@ -73,14 +74,14 @@ export function parseStoredProject(text: string): StoredProject {
     throw new Error('Saved project is not valid JSON');
   }
   if (!isRecord(candidate)) throw new Error('Saved project must be an object');
-  if (candidate.version !== 1) throw new Error(`Unsupported saved project version: ${String(candidate.version)}`);
+  if (candidate.version !== 1 && candidate.version !== 2) throw new Error(`Unsupported saved project version: ${String(candidate.version)}`);
   if (candidate.mode !== 'code' && candidate.mode !== 'visual') throw new Error('Saved project mode is invalid');
   if (candidate.codeSource !== null && typeof candidate.codeSource !== 'string') {
     throw new Error('Saved project codeSource must be a string or null');
   }
-  const visual = parseVisual(candidate.visual);
+  const visual = parseVisual(candidate.visual, candidate.version);
   return {
-    version: 1,
+    version: 2,
     mode: candidate.mode,
     codeSource: candidate.codeSource as string | null,
     visual,
@@ -91,7 +92,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseVisual(value: unknown): VisualProject {
+function parseVisual(value: unknown, version: 1 | 2): VisualProject {
   if (!isRecord(value)) throw new Error('Saved visual project must be an object');
   const contracts = parseItems(value.contracts, parseContract, 'contracts');
   if (!Array.isArray(value.nodes)) throw new Error('Saved nodes must be an array');
@@ -106,33 +107,32 @@ function parseVisual(value: unknown): VisualProject {
     }
   }
   const nodeIds = new Set(nodes.map(n => n.id));
-  const ifIds = new Set(nodes.filter(n => n.kind === 'if').map(n => n.id));
-  // Explicit branch migration: every child of a block belongs to one. Saves
-  // from before ELSE existed carry no branch and become THEN; ELSE
-  // membership under a block that lost (or never had) the flag is repaired
-  // to THEN rather than dropped.
-  const elseEnabled = new Set(nodes.filter(n => n.kind === 'if' && n.hasElse === true).map(n => n.id));
-  for (const [index, node] of nodes.entries()) {
-    if (node.parent === undefined || node.branch !== undefined) continue;
-    nodes[index] = { ...node, branch: 'then' };
-  }
-  for (const [index, node] of nodes.entries()) {
-    if (node.branch === 'else' && node.parent !== undefined && ifIds.has(node.parent) && !elseEnabled.has(node.parent)) {
-      nodes[index] = { ...node, branch: 'then' };
-    }
-  }
+  const parsedFrames = parseFrameSizes(value.frameSizes, new Set(nodes.filter(n => n.kind === 'if' || n.kind === 'else').map(n => n.id)));
   const parsedEdges = parseItems(value.edges, parseEdge, 'edges');
   // Fold the old explicit-decoder graphs onto the call's own output ports.
   const { kept, legacy } = splitLegacyEdges(parsedEdges, new Set(decoders.keys()));
-  const edges = [...kept, ...foldLegacyDecoders(legacy, decoders, nodes, contracts)]
+  let edges = [...kept, ...foldLegacyDecoders(legacy, decoders, nodes, contracts)]
     .filter(e => nodeIds.has(e.from.node) && nodeIds.has(e.to.node));
-  const positions = parsePositions(value.positions);
+  let positions = parsePositions(value.positions);
+  let frameSizes = parsedFrames;
+  if (version === 1) {
+    const migrated = migrateEmbeddedElse({ nodes, edges, positions, frameSizes });
+    nodes.splice(0, nodes.length, ...migrated.nodes);
+    edges = migrated.edges;
+    positions = migrated.positions;
+    frameSizes = migrated.frameSizes;
+  }
+  for (const [index, node] of nodes.entries()) {
+    const { branch: _legacyBranch, hasElse: _legacyElse, ...canonical } = node as GraphNode & { hasElse?: boolean };
+    nodes[index] = canonical as GraphNode;
+  }
+  const migratedNodeIds = new Set(nodes.map(n => n.id));
   return {
     contracts,
     nodes,
     edges,
-    positions: Object.fromEntries(Object.entries(positions).filter(([id]) => nodeIds.has(id))),
-    frameSizes: parseFrameSizes(value.frameSizes, ifIds),
+    positions: Object.fromEntries(Object.entries(positions).filter(([id]) => migratedNodeIds.has(id))),
+    frameSizes,
   };
 }
 
@@ -232,6 +232,8 @@ function parseNode(value: unknown): GraphNode | null {
     case 'if':
       return { ...base, kind: 'if', ...(value.hasElse === true ? { hasElse: true } : {}),
         ...(typeof value.autoSuccessFor === 'string' ? { autoSuccessFor: value.autoSuccessFor } : {}) };
+    case 'else':
+      return { ...base, kind: 'else' };
     default:
       return null;
   }
@@ -313,8 +315,8 @@ function parseEdge(value: unknown): GraphEdge | null {
       : null;
   const from = endpoint(value.from);
   const to = endpoint(value.to);
-  if (!from || !to) return null;
-  return { id: value.id, from, to };
+  if (!from || !to || (value.kind !== undefined && value.kind !== 'control')) return null;
+  return { id: value.id, ...(value.kind === 'control' ? { kind: 'control' as const } : {}), from, to };
 }
 
 function parsePositions(value: unknown): Readonly<Record<string, Vec2>> {
@@ -333,7 +335,7 @@ function parsePositions(value: unknown): Readonly<Record<string, Vec2>> {
  * Frame sizes are newer optional presentation data: a missing or malformed
  * map is never fatal (old saves predate it), only bad entries drop.
  * Values are clamped up to the minimum so a corrupt tiny size cannot
- * collapse a frame; entries for non-IF nodes are dropped.
+ * collapse a frame; entries for non-container nodes are dropped.
  */
 function parseFrameSizes(value: unknown, ifIds: ReadonlySet<string>): Readonly<Record<string, IfFrameSize>> {
   if (!isRecord(value)) return {};

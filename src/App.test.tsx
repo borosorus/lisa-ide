@@ -111,10 +111,15 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
   }
 
-  /** Visual mode collapses Output by default; content assertions expand it. */
+  function openNodes() {
+    const menu = screen.queryByRole('button', { name: /^Nodes\b/ });
+    if (menu && menu.getAttribute('aria-expanded') !== 'true') fireEvent.click(menu);
+  }
+
+  /** Expand Output when a test begins before a compile/import action. */
   function openOutput() {
-    const toggle = screen.getByRole('button', { name: /Output/, expanded: false });
-    fireEvent.click(toggle);
+    const toggle = screen.queryByRole('button', { name: /Output/, expanded: false });
+    if (toggle) fireEvent.click(toggle);
   }
 
   /** Add a contract through the dialog and wait for its collapsed row. */
@@ -395,7 +400,7 @@ describe('App', () => {
   it('creates balance, hash, and guard nodes from the palette', async () => {
     render(<App />);
     toVisual();
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Balance' }));
     fireEvent.click(screen.getByRole('button', { name: 'Hash' }));
     fireEvent.click(screen.getByRole('button', { name: 'Guard' }));
@@ -408,7 +413,7 @@ describe('App', () => {
   it('creates send and raw call nodes from the palette', async () => {
     render(<App />);
     toVisual();
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     fireEvent.click(screen.getByRole('button', { name: 'Raw call' }));
     await waitFor(() => {
@@ -431,7 +436,7 @@ describe('App', () => {
   it('creates nodes from the palette and edits the selected node', async () => {
     render(<App />);
     toVisual();
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Nodes\b/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
@@ -449,7 +454,7 @@ describe('App', () => {
     render(<App />);
     toVisual();
     await addContract();
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
@@ -468,11 +473,12 @@ describe('App', () => {
     render(<App />);
     toVisual();
     await addContract();
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-delete-first' }));
     await screen.findByText(/Removed 1 node/);
     // A later edit means a wholesale snapshot restore would discard it — so undo goes.
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
     await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.nodes).toHaveLength(1));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument());
@@ -492,7 +498,7 @@ describe('App', () => {
     render(<App />);
     toVisual();
     await addContract();
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
@@ -508,7 +514,7 @@ describe('App', () => {
     render(<App />);
     toVisual();
     await addContract();
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
@@ -521,14 +527,16 @@ describe('App', () => {
     });
   });
 
-  it('collapses the output panel to a one-line summary', async () => {
+  it('expands Output for compilation and can collapse it to a one-line summary', async () => {
     compileMock.mockResolvedValue(output);
     render(<App />);
     toVisual();
     expect(screen.getByRole('button', { name: /Output/, expanded: false })).toBeInTheDocument();
     expect(screen.getByText('idle')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
-    await waitFor(() => expect(screen.getByText('compiled · 1 bytes')).toBeInTheDocument());
+    expect(await screen.findByLabelText('Compiled bytecode')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
+    expect(screen.getByText('compiled · 1 bytes')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Output/ }));
     expect(await screen.findByLabelText('Compiled bytecode')).toBeInTheDocument();
   });
@@ -538,9 +546,9 @@ describe('App', () => {
     render(<App />);
     toVisual();
     fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
-    await waitFor(() => expect(screen.getByText('compiled · 1 bytes')).toBeInTheDocument());
-    // The bar stays collapsed and the action stays on it — disabled here only
-    // because no wallet is connected; never merely because the pane is shut.
+    await screen.findByLabelText('Compiled bytecode');
+    // Output expands on compile. The action also stays available when manually collapsed.
+    fireEvent.click(screen.getByRole('button', { name: /Output/ }));
     expect(screen.getByRole('button', { name: 'Execute program' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: /Output/ }));
     expect(screen.getByRole('button', { name: 'Execute program' })).toBeInTheDocument();
@@ -571,11 +579,10 @@ describe('App', () => {
     toVisual();
     await addContract();
     await expandContract('USDC');
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect-ctx' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Contracts' }));
     await expandContract('USDC');
     fireEvent.change(screen.getByLabelText('Address for USDC'), { target: { value: '0x2222222222222222222222222222222222222222' } });
     fireEvent.blur(screen.getByLabelText('Address for USDC'));
@@ -709,7 +716,7 @@ describe('visual ELSE flows', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-enable-else-first' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-select-else-branch' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Nodes\b/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');

@@ -3,6 +3,9 @@ import {
   type ContractResource, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type ScopeTarget, type Vec2, type VisualProject,
 } from './model';
 import { descendants, expandIfFrames } from './containment';
+import { pairedElse, pairedIf } from './controlFlow';
+import { isContainer } from './controlFlow';
+import { nodeSize } from './spawnPosition';
 import { tryOutputGates } from './validate';
 
 /**
@@ -34,14 +37,29 @@ export function removeContract(project: VisualProject, id: string): VisualProjec
 export function addNode(
   project: VisualProject, node: VisualProject['nodes'][number], position: Vec2,
 ): VisualProject {
-  const added: VisualProject = {
+  const { branch: _legacyBranch, hasElse: _legacyElse, ...cleanNode } = node as GraphNode & { hasElse?: boolean };
+  const addedNode = cleanNode as GraphNode;
+  let added: VisualProject = {
     ...project,
-    nodes: [...project.nodes, node],
-    positions: { ...project.positions, [node.id]: position },
-    ...(node.kind === 'if'
-      ? { frameSizes: { ...project.frameSizes, [node.id]: IF_DEFAULT_SIZE } }
+    nodes: [...project.nodes, addedNode],
+    positions: { ...project.positions, [addedNode.id]: position },
+    ...(addedNode.kind === 'if' || addedNode.kind === 'else'
+      ? { frameSizes: { ...project.frameSizes, [addedNode.id]: IF_DEFAULT_SIZE } }
       : {}),
   };
+  if (addedNode.kind === 'if') {
+    const elseId = createId(added.nodes.map(entry => entry.id), 'else');
+    const elseNode: GraphNode = { id: elseId, kind: 'else', ...(addedNode.parent ? { parent: addedNode.parent } : {}) };
+    const edgeId = createId(added.edges.map(edge => edge.id), 'e');
+    const size = nodeSize(addedNode, added);
+    added = {
+      ...added,
+      nodes: [...added.nodes, elseNode],
+      edges: [...added.edges, { id: edgeId, kind: 'control', from: { node: addedNode.id, port: 'else' }, to: { node: elseId, port: 'if' } }],
+      positions: { ...added.positions, [elseId]: { x: position.x + size.width + 56, y: position.y } },
+      frameSizes: { ...added.frameSizes, [elseId]: IF_DEFAULT_SIZE },
+    };
+  }
   // Adding inside a frame may require the frame to grow around its new member.
   return expandIfFrames(added);
 }
@@ -64,7 +82,14 @@ export function duplicateNode(
   const source = project.nodes.find(node => node.id === sourceId);
   if (!source) return null;
 
-  const copiedIds = new Set([sourceId, ...(source.kind === 'if' ? descendants(project, sourceId) : [])]);
+  const copiedIds = new Set([sourceId, ...descendants(project, sourceId)]);
+  if (source.kind === 'if') {
+    const paired = pairedElse(project, source.id);
+    if (paired) {
+      copiedIds.add(paired.id);
+      for (const id of descendants(project, paired.id)) copiedIds.add(id);
+    }
+  }
   const originals = project.nodes.filter(node => copiedIds.has(node.id));
   const idMap = new Map<string, string>();
   const usedNodeIds = project.nodes.map(node => node.id);
@@ -114,6 +139,7 @@ export function duplicateNode(
   const usedEdgeIds = project.edges.map(edge => edge.id);
   const copiedEdges = project.edges
     .filter(edge => {
+      if (edge.kind === 'control') return copiedIds.has(edge.from.node) && copiedIds.has(edge.to.node);
       if (!copiedIds.has(edge.to.node)) return false;
       const owner = nodesById.get(edge.from.node);
       if (owner?.kind === 'call' && externalTryCalls.has(owner.id) && /^out:\d+$/.test(edge.from.port)) {
@@ -127,6 +153,7 @@ export function duplicateNode(
       usedEdgeIds.push(id);
       return {
         id,
+        ...(edge.kind === 'control' ? { kind: 'control' as const } : {}),
         from: { ...edge.from, node: idMap.get(edge.from.node) ?? edge.from.node },
         to: { ...edge.to, node: idMap.get(edge.to.node)! },
       };
@@ -140,7 +167,7 @@ export function duplicateNode(
   positions[idMap.get(sourceId)!] = position;
   const frameSizes = { ...project.frameSizes };
   for (const node of originals) {
-    if (node.kind !== 'if') continue;
+    if (node.kind !== 'if' && node.kind !== 'else') continue;
     const size = project.frameSizes[node.id];
     if (size) frameSizes[idMap.get(node.id)!] = { ...size };
   }
@@ -173,13 +200,13 @@ export function setCallFailureMode(
   if (mode === 'continue') {
     const scopedMatch = project.edges.find(edge => edge.from.node === callId && edge.from.port === 'success' &&
       edge.to.port === 'condition' && project.nodes.some(node => node.id === edge.to.node && node.kind === 'if' &&
-        node.parent === call.parent && (node.parent === undefined || (node.branch ?? 'then') === (call.branch ?? 'then'))));
+        node.parent === call.parent));
     const gateId = scopedMatch?.to.node;
     let next = updateNode(project, callId, { failureMode: mode });
     if (gateId) return { project: next, successIfId: gateId };
     if (!scaffold) return { project: next };
     const gate: GraphNode = { id: scaffold.id, kind: 'if', autoSuccessFor: callId,
-      ...(call.parent === undefined ? {} : { parent: call.parent, branch: call.branch ?? 'then' }) };
+      ...(call.parent === undefined ? {} : { parent: call.parent }) };
     next = addNode(next, gate, scaffold.position);
     const ordered = [...next.nodes];
     const insertedIndex = ordered.findIndex(node => node.id === gate.id);
@@ -206,12 +233,14 @@ export function setCallFailureMode(
         return manualGate;
       }) } };
     }
-    const hasChildren = project.nodes.some(node => node.parent === ownedGate.id);
+    const ownedElse = pairedElse(project, ownedGate.id);
+    const hasChildren = project.nodes.some(node => node.parent === ownedGate.id
+      || (ownedElse !== undefined && node.parent === ownedElse.id));
     if (hasChildren) return { project, message: 'Empty this success branch before switching back to Revert.' };
     const successEdges = project.edges.filter(edge => edge.from.node === callId && edge.from.port === 'success');
     if (successEdges.some(edge => edge !== gateEdge)) return { project, message: 'Disconnect other success outputs before switching back to Revert.' };
     let next = updateNode(project, callId, { failureMode: mode });
-    next = removeNodes(next, [ownedGate.id]);
+    next = removeNodes(next, [ownedGate.id, ...(ownedElse ? [ownedElse.id] : [])]);
     return { project: next };
   }
   const connectedGate = project.edges.some(edge => edge.from.node === callId && edge.from.port === 'success');
@@ -259,7 +288,12 @@ function dropNodes(project: VisualProject, ids: string[]): VisualProject {
     project.edges.some(edge => edge.from.node === node.autoSuccessFor && edge.from.port === 'success' &&
       edge.to.node === node.id && edge.to.port === 'condition'));
   for (const gate of ownedGates) {
-    if (!project.nodes.some(node => node.parent === gate.id)) doomed.add(gate.id);
+    const ownedElse = pairedElse(project, gate.id);
+    if (!project.nodes.some(node => node.parent === gate.id
+        || (ownedElse !== undefined && node.parent === ownedElse.id))) {
+      doomed.add(gate.id);
+      if (ownedElse) doomed.add(ownedElse.id);
+    }
   }
   const touches = (edge: GraphEdge, set: Set<string>) =>
     set.has(edge.from.node) || set.has(edge.to.node);
@@ -284,8 +318,13 @@ export function addEdge(project: VisualProject, edge: Omit<GraphEdge, 'id'>): Vi
 
 /** Connect a source port to an input port, replacing any existing driver. */
 export function connectPort(project: VisualProject, edge: Omit<GraphEdge, 'id'>): VisualProject {
-  const without = project.edges.filter(e => e.to.node !== edge.to.node || e.to.port !== edge.to.port);
-  return addEdge({ ...project, edges: without }, edge);
+  const source = project.nodes.find(node => node.id === edge.from.node);
+  const target = project.nodes.find(node => node.id === edge.to.node);
+  const isElsePair = source?.kind === 'if' && edge.from.port === 'else'
+    && target?.kind === 'else' && edge.to.port === 'if';
+  const without = project.edges.filter(e => (e.to.node !== edge.to.node || e.to.port !== edge.to.port)
+    && !(isElsePair && e.kind === 'control' && e.from.node === edge.from.node));
+  return addEdge({ ...project, edges: without }, isElsePair ? { ...edge, kind: 'control' } : edge);
 }
 
 /** Patch editable node fields; identity (id/kind/parent/branch) stays stable. */
@@ -313,25 +352,28 @@ export function removeEdge(project: VisualProject, id: string): VisualProject {
 export function setNodeScope(project: VisualProject, nodeId: string, scope: ScopeTarget | null): VisualProject {
   const node = project.nodes.find(n => n.id === nodeId);
   if (!node) return project;
+  const paired = node.kind === 'if' ? pairedElse(project, node.id)
+    : node.kind === 'else' ? pairedIf(project, node.id)
+    : undefined;
+  const relatedIds = [nodeId, ...(paired ? [paired.id] : [])];
   if (scope === null) {
-    if (node.parent === undefined && node.branch === undefined) return project;
-    return patchScope(project, nodeId, undefined, undefined);
+    if (relatedIds.every(id => project.nodes.find(candidate => candidate.id === id)?.parent === undefined)) return project;
+    return patchScopes(project, relatedIds, undefined);
   }
-  const { parent, branch } = scope;
+  const { parent } = scope;
   if (parent === nodeId) return project;
   const parentIf = project.nodes.find(n => n.id === parent);
-  if (!parentIf || parentIf.kind !== 'if') return project;
-  if (branch === 'else' && parentIf.hasElse !== true) return project;
+  if (!parentIf || (parentIf.kind !== 'if' && parentIf.kind !== 'else')) return project;
   // Walk the target's ancestors: assigning into own subtree would cycle.
   let ancestor: string | undefined = parent;
   const seen = new Set<string>();
   while (ancestor !== undefined && !seen.has(ancestor)) {
-    if (ancestor === nodeId) return project;
+    if (relatedIds.includes(ancestor)) return project;
     seen.add(ancestor);
     ancestor = project.nodes.find(n => n.id === ancestor)?.parent;
   }
-  if (node.parent === parent && node.branch === branch) return project;
-  return patchScope(project, nodeId, parent, branch);
+  if (relatedIds.every(id => project.nodes.find(candidate => candidate.id === id)?.parent === parent)) return project;
+  return patchScopes(project, relatedIds, parent);
 }
 
 /** Legacy containment calls (drag pre-ELSE): entering a block means THEN. */
@@ -339,17 +381,16 @@ export function setNodeParent(project: VisualProject, nodeId: string, parent: st
   return setNodeScope(project, nodeId, parent === undefined ? null : { parent, branch: 'then' });
 }
 
-function patchScope(
-  project: VisualProject, nodeId: string, parent: string | undefined, branch: IfBranch | undefined,
-): VisualProject {
+function patchScopes(project: VisualProject, nodeIds: readonly string[], parent: string | undefined): VisualProject {
+  const updated = new Set(nodeIds);
   return {
     ...project,
     nodes: project.nodes.map(n => {
-      if (n.id !== nodeId) return n;
+      if (!updated.has(n.id)) return n;
       const { parent: _gone, branch: _goneB, ...rest } = n;
       return parent === undefined
         ? (rest as VisualProject['nodes'][number])
-        : { ...rest, parent, branch } as VisualProject['nodes'][number];
+        : { ...rest, parent } as VisualProject['nodes'][number];
     }),
   };
 }
@@ -361,12 +402,14 @@ function patchScope(
  */
 export function enableElse(project: VisualProject, id: string): VisualProject {
   const node = project.nodes.find(n => n.id === id);
-  if (!node || node.kind !== 'if' || node.hasElse === true) return project;
-  const next = {
-    ...project,
-    nodes: project.nodes.map(n => (n.id === id ? { ...n, hasElse: true } : n)),
-  };
-  return expandIfFrames(next);
+  if (node?.kind !== 'if' || pairedElse(project, id)) return project;
+  const position = project.positions[id] ?? { x: 0, y: 0 };
+  const size = nodeSize(node, project);
+  const elseId = createId(project.nodes.map(n => n.id), 'else');
+  let next = addNode(project, { id: elseId, kind: 'else', ...(node.parent ? { parent: node.parent } : {}) },
+    { x: position.x + size.width + 56, y: position.y });
+  next = connectPort(next, { kind: 'control', from: { node: id, port: 'else' }, to: { node: elseId, port: 'if' } });
+  return next;
 }
 
 /**
@@ -393,7 +436,7 @@ export function moveGraphNodes(
  */
 export function setNodeFrameSize(project: VisualProject, id: string, size: IfFrameSize): VisualProject {
   const node = project.nodes.find(n => n.id === id);
-  if (!node || node.kind !== 'if') return project;
+  if (!node || !isContainer(node)) return project;
   if (!Number.isFinite(size.width) || !Number.isFinite(size.height)) return project;
   const clamped = clampFrameSize(size);
   const current = project.frameSizes?.[id] ?? IF_DEFAULT_SIZE;

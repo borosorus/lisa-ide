@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Box, Button, CircularProgress, CssBaseline, GlobalStyles, IconButton, MenuItem, Paper, Select,
-  Snackbar, Stack, Tab, Tabs, ThemeProvider, Tooltip, Typography,
+  Box, Button, CircularProgress, CssBaseline, GlobalStyles, IconButton, Paper,
+  Snackbar, Stack, ThemeProvider, Tooltip, Typography,
 } from '@mui/material';
 import BoltRoundedIcon from '@mui/icons-material/BoltRounded';
 
 import CheckCircleOutlineRoundedIcon from '@mui/icons-material/CheckCircleOutlineRounded';
-import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
-import ChevronLeftRoundedIcon from '@mui/icons-material/ChevronLeftRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
-import TerminalRoundedIcon from '@mui/icons-material/TerminalRounded';
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
 import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded';
@@ -26,11 +23,12 @@ import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas, type CanvasApi } from './visual/VisualCanvas';
 import {
-  addContract, addNode, connectPort, duplicateNode, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes, resetCanvas, setCallFailureMode,
+  addContract, addNode, connectPort, duplicateNode, moveGraphNodes, removeContract, removeEdge, removeNodes, resetCanvas, setCallFailureMode,
   setNodeFrameSize, updateContract, updateNode,
 } from './visual/projectState';
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type ScopeTarget, type Vec2, type VisualProject } from './visual/model';
-import { NodeInspector, VisualPalette } from './visual/NodePanel';
+import { isContainer } from './visual/controlFlow';
+import { NodeMenu } from './visual/NodePanel';
 import { nodeSize, spawnPosition } from './visual/spawnPosition';
 import { effectiveSize, occupiedRects, resolveNodeDrop, spawnInsideIf } from './visual/containment';
 import { validateProject } from './visual/validate';
@@ -41,6 +39,7 @@ import { ExecutionDialog } from './wallet/ExecutionDialog';
 import { useWalletExecution } from './wallet/useWalletExecution';
 import { Toolbar } from './shell/Toolbar';
 import { OutputPanel } from './shell/OutputPanel';
+import { ExampleSelect } from './shell/ExampleSelect';
 import { cssVarStyles, theme } from './theme/theme';
 import './styles.css';
 
@@ -49,7 +48,7 @@ function diagnosticFrom(error: unknown): CompileDiagnostic {
   return { message: error instanceof Error ? error.message : String(error) };
 }
 
-const DEFAULT_STORED = { version: 1 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
+const DEFAULT_STORED = { version: 2 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
 
 /** Pane heading: a quiet icon carrying the eye to what the pane is for. */
 function PaneTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
@@ -72,21 +71,18 @@ export default function App() {
   const [generated, setGenerated] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  // UI-only spawn target: the branch region last clicked (§9). Cleared with
-  // the node selection; never persisted, never read by lowering.
-  const [selectedBranch, setSelectedBranch] = useState<{ nodeId: string; branch: 'then' | 'else' } | null>(null);
+  // New or menu-selected nodes are revealed; the token permits repeat selects.
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
   const [visualCanvasKey, setVisualCanvasKey] = useState(0);
-  const [libraryTab, setLibraryTab] = useState(0);
   const [libraryOpen, setLibraryOpen] = useState(true);
   // One-deep, single-slot undo for graph deletions: a hand-built graph can lose
   // minutes of wiring to one Delete keypress, and that keystroke is silent.
   const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string; refitOnUndo?: boolean } | null>(null);
   // Lets a deletion's own editVisual pass through without voiding the slot it just filled.
   const keepUndoSlot = useRef(false);
-  // Visual mode gives the canvas the space: Output starts collapsed there.
-  const [outputOpen, setOutputOpen] = useState(stored.mode !== 'visual');
-  useEffect(() => { setOutputOpen(mode !== 'visual'); }, [mode]);
+  // Output is a shared bottom dock. It opens when the user compiles or imports.
+  const [outputOpen, setOutputOpen] = useState(false);
   // Errors are otherwise invisible behind a collapsed panel; open to reveal.
   useEffect(() => { if (error) setOutputOpen(true); }, [error]);
   const client = useRef<CompilerClient | null>(null);
@@ -94,8 +90,13 @@ export default function App() {
   const editorRef = useRef<SourceEditorHandle | null>(null);
   const revision = useRef(0);
 
+  function requestNodeFocus(id: string | null) {
+    setFocusNodeId(id);
+    if (id !== null) setFocusRequest(request => request + 1);
+  }
+
   useEffect(() => () => client.current?.dispose(), []);
-  useEffect(() => saveStoredProject({ version: 1, mode, codeSource: source, visual: project }), [mode, source, project]);
+  useEffect(() => saveStoredProject({ version: 2, mode, codeSource: source, visual: project }), [mode, source, project]);
   // One pure validation pass feeds both the canvas error states and compile.
   const diagnostics = useMemo(() => validateProject(project), [project]);
 
@@ -108,8 +109,7 @@ export default function App() {
    * a toggle; what the user verifies before a broadcast is a centered window.
    */
   const execution = useWalletExecution(importedArtifact === null ? output : null);
-  // Mounted in exactly one header at a time: the mode branch and the collapse
-  // state decide, and both cannot show simultaneously.
+  // Mounted once in the shared Output dock header.
   const executeSlot = <ExecuteButton execution={execution} />;
 
   function replaceSource(next: string, nextNotice = '') {
@@ -127,8 +127,7 @@ export default function App() {
   function loadVisualExample(example: VisualExample) {
     setSelectedId(null);
     setSelectedEdgeId(null);
-    setSelectedBranch(null);
-    setFocusNodeId(null);
+    requestNodeFocus(null);
     keepUndoSlot.current = false;
     editVisual(example.createProject());
     setVisualCanvasKey(key => key + 1);
@@ -162,18 +161,17 @@ export default function App() {
 
   function addCallNode(contractId: string, signature: string, anchor: Vec2) {
     const id = createId(project.nodes.map(n => n.id), 'call');
-    setFocusNodeId(id);
+    requestNodeFocus(id);
     editVisual(p => {
       // The same normalization rule as existing-node drags (resolveNodeDrop):
-      // the card's rect at the drop point picks the branch (header/divider/
-      // outside stay top-level), then the full rect is placed inside the
-      // branch body — a free slot if one exists, else the clamped point.
+      // the card's rect at the drop point picks a container, then the full
+      // rect is placed inside that body — a free slot if one exists.
       const call: GraphNode = { id, kind: 'call', contractId, signature };
       const size = nodeSize(call, p);
       const resolved = resolveNodeDrop({ project: p, node: call, desiredPosition: anchor });
       if (resolved.scope !== null) {
-        const placed = spawnInsideIf({ project: p, frameId: resolved.scope.parent, branch: resolved.scope.branch, size, anchor });
-        const node = { ...call, ...resolved.scope } as GraphNode;
+        const placed = spawnInsideIf({ project: p, frameId: resolved.scope.parent, branch: 'then', size, anchor });
+        const node = { ...call, parent: resolved.scope.parent } as GraphNode;
         return addNode(p, node, placed ? placed.position : resolved.position);
       }
       return addNode(p, call, spawnNear(p, { x: anchor.x + size.width / 2, y: anchor.y + size.height / 2 }, call));
@@ -187,29 +185,36 @@ export default function App() {
 
   function addVisualNode(partial: GraphNodeDraft, prefix: string) {
     const id = createId(project.nodes.map(n => n.id), prefix);
-    setFocusNodeId(id);
+    requestNodeFocus(id);
+    selectCreatedNode(id);
     editVisual(p => placeNode(p, { ...partial, id } as GraphNode));
   }
 
+  function selectCreatedNode(id: string) {
+    setSelectedId(id);
+    setSelectedEdgeId(null);
+  }
+
   /**
-   * One creation funnel for palette adds and click-to-adds. The selected
-   * branch region claims the new node when one was clicked; otherwise a
-   * selected IF claims it into THEN. The node spawns in a free slot of that
-   * branch body (growing the frame when needed) and takes the semantic
-   * parent/branch explicitly — never inferred from screen overlap. Without
-   * an IF context the viewport spiral decides.
+   * One creation funnel for palette adds and click-to-adds. A selected
+   * container claims new nodes into its body. The standalone ELSE action
+   * stays a sibling of a selected IF so it can be connected to that IF.
    */
   function placeNode(p: VisualProject, node: GraphNode): VisualProject {
-    const scope: ScopeTarget | null = selectedBranch !== null
-      && p.nodes.some(n => n.id === selectedBranch.nodeId && n.kind === 'if'
-          && (selectedBranch.branch === 'then' || n.hasElse === true))
-      ? { parent: selectedBranch.nodeId, branch: selectedBranch.branch }
-      : selectedId !== null && p.nodes.some(n => n.id === selectedId && n.kind === 'if')
-        ? { parent: selectedId, branch: 'then' }
-        : null;
+    const selected = p.nodes.find(candidate => candidate.id === selectedId);
+    if (node.kind === 'else' && selected?.kind === 'if') {
+      const origin = p.positions[selected.id] ?? viewportCenter();
+      const anchor = { x: origin.x + nodeSize(selected, p).width + 56, y: origin.y };
+      if (selected.parent) {
+        const placed = spawnInsideIf({ project: p, frameId: selected.parent, branch: 'then', size: nodeSize(node, p), anchor });
+        if (placed) return addNode(p, { ...node, parent: selected.parent }, placed.position);
+      }
+      return addNode(p, node, spawnNear(p, anchor, node));
+    }
+    const scope: ScopeTarget | null = selected && isContainer(selected) ? { parent: selected.id, branch: 'then' } : null;
     if (scope !== null && scope.parent !== node.id) {
-      const placed = spawnInsideIf({ project: p, frameId: scope.parent, branch: scope.branch, size: nodeSize(node, p) });
-      if (placed) return addNode(p, { ...node, parent: scope.parent, branch: scope.branch } as GraphNode, placed.position);
+      const placed = spawnInsideIf({ project: p, frameId: scope.parent, branch: 'then', size: nodeSize(node, p) });
+      if (placed) return addNode(p, { ...node, parent: scope.parent } as GraphNode, placed.position);
     }
     return addNode(p, node, spawnNear(p, viewportCenter(), node));
   }
@@ -231,7 +236,8 @@ export default function App() {
   /** Click-to-add from the library: into the selected IF, else the viewport. */
   function addFunctionNode(contractId: string, signature: string) {
     const id = createId(project.nodes.map(n => n.id), 'call');
-    setFocusNodeId(id);
+    requestNodeFocus(id);
+    selectCreatedNode(id);
     editVisual(p => placeNode(p, { id, kind: 'call', contractId, signature }));
   }
 
@@ -249,12 +255,12 @@ export default function App() {
       const placement = spawnInsideIf({
         project,
         frameId: source.parent,
-        branch: source.branch ?? 'then',
+        branch: 'then',
         size,
         anchor,
       });
       if (!placement) {
-        setNotice('Could not find room to duplicate this node inside its branch.');
+        setNotice('Could not find room to duplicate this node inside its container.');
         return;
       }
       position = placement.position;
@@ -271,13 +277,12 @@ export default function App() {
     editVisual(duplicated.project);
     setSelectedId(duplicated.nodeId);
     setSelectedEdgeId(null);
-    setSelectedBranch(null);
-    setFocusNodeId(source.parent === undefined ? duplicated.nodeId : null);
+    requestNodeFocus(source.parent === undefined ? duplicated.nodeId : null);
     setUndo({ snapshot: project, message: duplicated.externalTryResultsOmitted
       ? 'IF duplicated; try-call results need rewiring' : 'Node duplicated' });
     setNotice(duplicated.externalTryResultsOmitted
-      ? 'Duplicated the IF block. Wire its try-call result inputs to a try-call inside the copied block.'
-      : source.kind === 'if' ? 'Duplicated the IF block and its nested contents.' : 'Duplicated the selected node.');
+      ? 'Duplicated the IF/ELSE pair. Wire its try-call result inputs to a try-call inside the copied block.'
+      : source.kind === 'if' ? 'Duplicated the IF/ELSE pair and its nested contents.' : 'Duplicated the selected node.');
   }
 
   function resetVisualCanvas() {
@@ -286,8 +291,7 @@ export default function App() {
     editVisual(resetCanvas(project));
     setSelectedId(null);
     setSelectedEdgeId(null);
-    setSelectedBranch(null);
-    setFocusNodeId(null);
+    requestNodeFocus(null);
     setVisualCanvasKey(key => key + 1);
     setUndo({ snapshot, message: 'Canvas reset', refitOnUndo: true });
     setNotice('Canvas reset. Contract resources remain available.');
@@ -304,7 +308,7 @@ export default function App() {
       const sourceSize = nodeSize(call, project);
       const anchor = { x: sourcePosition.x + sourceSize.width + 28 + size.width / 2, y: sourcePosition.y + size.height / 2 };
       const placement = call.parent
-        ? spawnInsideIf({ project, frameId: call.parent, branch: call.branch ?? 'then', size, anchor })
+        ? spawnInsideIf({ project, frameId: call.parent, branch: 'then', size, anchor })
         : null;
       scaffold.position = placement?.position ?? spawnNear(project, anchor, gate);
     }
@@ -313,16 +317,13 @@ export default function App() {
     if (transition.project !== project) editVisual(transition.project);
     if (transition.successIfId) {
       setSelectedId(transition.successIfId);
-      setSelectedBranch({ nodeId: transition.successIfId, branch: 'then' });
       // A nested scaffold is created beside a call already in the viewport.
       // Fitting only that child makes xyflow mis-center nested coordinates;
       // keep the current view for nested calls and pan for top-level ones.
-      setFocusNodeId(call.parent ? null : transition.successIfId);
+      requestNodeFocus(call.parent ? null : transition.successIfId);
     } else if (mode === 'revert') {
       const removedGate = project.nodes.find(node => node.kind === 'if' && node.autoSuccessFor === callId);
       if (removedGate && selectedId === removedGate.id) setSelectedId(null);
-      if (removedGate && selectedBranch?.nodeId === removedGate.id) setSelectedBranch(null);
-      setSelectedBranch(current => current?.nodeId === callId ? null : current);
     }
     return undefined;
   }
@@ -335,14 +336,12 @@ export default function App() {
     editVisual(entry.snapshot);
     setSelectedId(null);
     setSelectedEdgeId(null);
-    setSelectedBranch(null);
-    setFocusNodeId(null);
+    requestNodeFocus(null);
     if (entry.refitOnUndo) setVisualCanvasKey(key => key + 1);
   }
 
   function deleteNodes(ids: string[]) {
     if (selectedId && ids.includes(selectedId)) setSelectedId(null);
-    if (selectedBranch && ids.includes(selectedBranch.nodeId)) setSelectedBranch(null);
     const edgesLost = project.edges.filter(e => ids.includes(e.from.node) || ids.includes(e.to.node)).length;
     const message = `Removed ${ids.length} node${ids.length === 1 ? '' : 's'}${edgesLost > 0 ? ` and ${edgesLost} edge${edgesLost === 1 ? '' : 's'}` : ''}`;
     keepUndoSlot.current = true;
@@ -358,6 +357,7 @@ export default function App() {
   }
 
   async function compile() {
+    setOutputOpen(true);
     const currentRevision = revision.current;
     const compiler = client.current ?? new CompilerClient();
     client.current = compiler;
@@ -413,6 +413,7 @@ export default function App() {
   }
 
   async function importArtifact(file: File) {
+    setOutputOpen(true);
     const currentRevision = revision.current;
     const compiler = client.current ?? new CompilerClient();
     client.current = compiler;
@@ -470,10 +471,25 @@ export default function App() {
     onErrorReveal={line => editorRef.current?.revealLine(line)}
   />;
 
+  function insertContractFunction(contract: VisualProject['contracts'][number], fn: VisualProject['contracts'][number]['functions'][number]) {
+    const args = fn.inputs.map((type, index) => {
+      // ABI parameter names are untrusted metadata. Keep them out of source
+      // comments unless comment delimiters and line breaks are neutralized.
+      const name = fn.inputNames?.[index]?.replace(/[*/\r\n\u2028\u2029]/g, ' ').trim();
+      const hint = name ? `/* ${name} */ ` : '';
+      if (type === 'address') return `${hint}CALLER`;
+      if (type === 'bool') return `${hint}true`;
+      return `${hint}0n`;
+    });
+    const encoded = `encodeCall(${JSON.stringify(fn.signature)}${args.length ? `, [${args.join(', ')}]` : ''})`;
+    const method = fn.mutability === 'view' || fn.mutability === 'pure' ? 'staticCall' : 'call';
+    editorRef.current?.insertSnippet(`p.${method}(${JSON.stringify(contract.address)}, ${encoded});`);
+  }
+
   return <ThemeProvider theme={theme}>
     <CssBaseline />
     <GlobalStyles styles={cssVarStyles} />
-    <Box className={mode === 'visual' ? 'app app-fixed' : 'app'}>
+    <Box className="app app-fixed">
       <Stack component="header" className="topbar" direction="row" alignItems="center" justifyContent="space-between" gap={2}>
         <Stack direction="row" alignItems="center" spacing={1.5}>
           <Box className="brand-mark" aria-hidden="true"><BoltRoundedIcon fontSize="small" /></Box>
@@ -491,26 +507,16 @@ export default function App() {
         onCompile={compile}
         onImportFile={file => void importArtifact(file)}
       />
-      {mode === 'code' ? <Box className="workspace">
-        <Paper className="pane source-pane" elevation={0}>
+      <Box className={`workspace${libraryOpen ? '' : ' library-collapsed'}`}>
+        {mode === 'code' ? <Paper className="pane source-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
             <PaneTitle icon={<DescriptionRoundedIcon />}>Source</PaneTitle>
-            <Select
-              size="small"
-              value=""
-              displayEmpty
-              aria-label="Load example"
-              onChange={event => {
-                const example = SOURCE_EXAMPLES.find(candidate => candidate.id === event.target.value);
-                if (example) replaceSource(example.source, `Loaded example: ${example.label}`);
-              }}
-              sx={{ minWidth: 170 }}
-            >
-              <MenuItem value="" disabled>Load example…</MenuItem>
-              {SOURCE_EXAMPLES.map(example => (
-                <MenuItem key={example.id} value={example.id}>{example.label}</MenuItem>
-              ))}
-            </Select>
+            <ExampleSelect
+              options={SOURCE_EXAMPLES}
+              ariaLabel="Load example"
+              minWidth={170}
+              onSelect={example => replaceSource(example.source, `Loaded example: ${example.label}`)}
+            />
           </Stack>
           <SourceEditor
             ref={editorRef}
@@ -519,42 +525,28 @@ export default function App() {
             onCompile={compile}
             diagnostic={error}
           />
-        </Paper>
-        <Paper className="pane output-pane" elevation={0}>
-          <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-            <PaneTitle icon={<TerminalRoundedIcon />}>Output</PaneTitle>
-            {executeSlot}
-          </Stack>
-          <Box className="output-content">{outputPanel}</Box>
-        </Paper>
-      </Box> : <Box className={`visual-workspace${libraryOpen ? '' : ' library-collapsed'}`}>
-        <Paper className="pane canvas-pane" elevation={0}>
+        </Paper> : <Paper className="pane canvas-pane" elevation={0}>
           <Stack className="pane-heading" direction="row" justifyContent="space-between" alignItems="center" gap={1}>
             <PaneTitle icon={<DashboardRoundedIcon />}>Canvas</PaneTitle>
             <Stack direction="row" alignItems="center" gap={0.75}>
-              <Select
-                size="small"
-                value=""
-                displayEmpty
-                aria-label="Load visual example"
-                onChange={event => {
-                  const example = VISUAL_EXAMPLES.find(candidate => candidate.id === event.target.value);
-                  if (example) loadVisualExample(example);
-                }}
-                sx={{ minWidth: 190, maxWidth: '42%' }}
-              >
-                <MenuItem value="" disabled>Load example…</MenuItem>
-                {VISUAL_EXAMPLES.map(example => (
-                  <MenuItem key={example.id} value={example.id} title={example.description}>{example.label}</MenuItem>
-                ))}
-              </Select>
-              <Tooltip title="Clear nodes and wiring; keep contract resources">
+              <NodeMenu
+                project={project}
+                onAdd={addVisualNode}
+              />
+              <ExampleSelect
+                options={VISUAL_EXAMPLES}
+                ariaLabel="Load visual example"
+                minWidth={160}
+                maxWidth="38%"
+                onSelect={loadVisualExample}
+              />
+              <Tooltip title="Reset canvas — clear nodes and wiring, keep contracts">
                 <span>
-                  <Button size="small" variant="outlined" color="warning" startIcon={<RestartAltRoundedIcon />}
+                  <IconButton size="small" color="warning" aria-label="Reset canvas" title="Reset canvas"
                     disabled={project.nodes.length === 0}
                     onClick={resetVisualCanvas}>
-                    Reset canvas
-                  </Button>
+                    <RestartAltRoundedIcon fontSize="small" />
+                  </IconButton>
                 </span>
               </Tooltip>
             </Stack>
@@ -571,70 +563,52 @@ export default function App() {
             onPatchNode={(id, fields) => editVisual(p => updateNode(p, id, fields))}
             onSetFailureMode={changeCallFailureMode}
             onResizeIf={(id, size) => editVisual(p => setNodeFrameSize(p, id, size), true)}
-            onEnableElse={id => editVisual(p => enableElse(p, id))}
-            onSelectBranch={(nodeId, branch) => { setSelectedBranch({ nodeId, branch }); setSelectedId(nodeId); }}
-            selectedBranch={selectedBranch}
             onSelectNode={id => {
               setSelectedId(id);
               if (id !== null) setSelectedEdgeId(null);
-              if (selectedBranch && selectedBranch.nodeId !== id) setSelectedBranch(null);
             }}
-            onSelectEdge={id => { setSelectedEdgeId(id); if (id !== null) setSelectedId(null); }}
+            onDuplicateSelected={duplicateSelectedNode}
+            onSelectEdge={id => {
+              setSelectedEdgeId(id);
+              if (id !== null) {
+                setSelectedId(null);
+              }
+            }}
             selectedNodeId={selectedId}
             selectedEdgeId={selectedEdgeId}
             diagnostics={diagnostics}
             focusNodeId={focusNodeId}
+            focusRequest={focusRequest}
           />
-        </Paper>
-        <Paper className="pane side-pane" elevation={0}>
-          <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-            {libraryOpen && <PaneTitle icon={<LibraryBooksRoundedIcon />}>Library</PaneTitle>}
-            <IconButton size="small" aria-label={libraryOpen ? 'Collapse library' : 'Expand library'}
-              onClick={() => setLibraryOpen(open => !open)} sx={{ p: 0.5 }}>
-              {libraryOpen
-                ? <ChevronRightRoundedIcon fontSize="small" />
-                : <ChevronLeftRoundedIcon fontSize="small" />}
-            </IconButton>
+        </Paper>}
+        <Paper className={`pane side-pane${libraryOpen ? '' : ' side-pane-collapsed'}`} elevation={0}>
+          <Stack className={`pane-heading library-heading${libraryOpen ? '' : ' library-heading-collapsed'}`} direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+            {libraryOpen ? <>
+              <PaneTitle icon={<LibraryBooksRoundedIcon />}>Library</PaneTitle>
+              <Tooltip title="Collapse library">
+                <IconButton size="small" aria-label="Collapse library" aria-expanded={libraryOpen}
+                  onClick={() => setLibraryOpen(false)} sx={{ p: 0.5 }}>
+                  <ChevronRightRoundedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            </> : <Tooltip title="Expand library">
+              <Button size="small" aria-label="Expand library" aria-expanded={libraryOpen}
+                startIcon={<LibraryBooksRoundedIcon />} onClick={() => setLibraryOpen(true)}>
+                Library
+              </Button>
+            </Tooltip>}
           </Stack>
-          {libraryOpen && <>
-            <Tabs value={libraryTab} onChange={(_, value: number) => setLibraryTab(value)} variant="fullWidth">
-              <Tab label="Contracts" />
-              <Tab label="Nodes" />
-            </Tabs>
-            <Box className="side-content">
-              {libraryTab === 0 ? (
-                <ContractsPanel
-                  contracts={project.contracts}
-                  onAddContract={contract => editVisual(p => addContract(p, contract))}
-                  onUpdateContract={(id, patch) => editVisual(p => updateContract(p, id, patch))}
-                  onRemoveContract={id => editVisual(p => removeContract(p, id))}
-                  onAddFunction={addFunctionNode}
-                />
-              ) : (
-                <VisualPalette onAdd={addVisualNode} />
-              )}
-              <Box className="side-section">
-                <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-                  <Typography variant="subtitle2">Selected node</Typography>
-                  <Tooltip title="Duplicate the selected node or IF block">
-                    <span>
-                      <Button size="small" variant="outlined" startIcon={<ContentCopyRoundedIcon />}
-                        disabled={!project.nodes.some(node => node.id === selectedId)}
-                        onClick={duplicateSelectedNode}>
-                        Duplicate
-                      </Button>
-                    </span>
-                  </Tooltip>
-                </Stack>
-                <Box sx={{ mt: 0.5 }}>
-                  <NodeInspector
-                    node={project.nodes.find(n => n.id === selectedId) ?? null}
-                    project={project}
-                  />
-                </Box>
-              </Box>
-            </Box>
-          </>}
+          <Box className="side-content" hidden={!libraryOpen}>
+            <ContractsPanel
+              mode={mode}
+              contracts={project.contracts}
+              onAddContract={contract => editVisual(p => addContract(p, contract))}
+              onUpdateContract={(id, patch) => editVisual(p => updateContract(p, id, patch))}
+              onRemoveContract={id => editVisual(p => removeContract(p, id))}
+              onAddFunction={addFunctionNode}
+              onInsertFunction={insertContractFunction}
+            />
+          </Box>
         </Paper>
         <Paper className={`pane output-pane${outputOpen ? '' : ' output-collapsed'}`} elevation={0}>
           <Stack className="pane-heading" direction="row" alignItems="center" justifyContent="space-between" gap={1}>
@@ -655,7 +629,7 @@ export default function App() {
           {!outputOpen && <Box sx={{ px: 1.5, pb: 1 }}><ExecuteBlocks execution={execution} /></Box>}
           {outputOpen && <Box className="output-content">{outputPanel}</Box>}
         </Paper>
-      </Box>}
+      </Box>
       <ExecutionDialog execution={execution} />
       <Snackbar
         open={undo !== null}

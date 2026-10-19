@@ -74,6 +74,8 @@ const diagnosticField = StateField.define<DecorationSet>({
 export interface SourceEditorHandle {
   /** Put the cursor on a 1-based line and center it — how an error becomes a place. */
   revealLine(line: number): void;
+  /** Insert a library snippet at the current selection (or before `return p;` initially). */
+  insertSnippet(snippet: string): void;
 }
 
 export const SourceEditor = forwardRef<SourceEditorHandle, {
@@ -86,6 +88,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, {
   const view = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onCompileRef = useRef(onCompile);
+  const userPlacedCursor = useRef(false);
   onChangeRef.current = onChange;
   onCompileRef.current = onCompile;
 
@@ -97,6 +100,25 @@ export const SourceEditor = forwardRef<SourceEditorHandle, {
       const pos = editor.state.doc.line(target).from;
       editor.dispatch({ selection: { anchor: pos, head: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
       editor.focus();
+    },
+    insertSnippet(snippet: string) {
+      const editor = view.current;
+      if (!editor) return;
+      let { from, to } = editor.state.selection.main;
+      if (!userPlacedCursor.current) {
+        const source = editor.state.doc.toString();
+        const returnAt = source.match(/^[ \t]*return[ \t]+p[ \t]*;[ \t]*$/m);
+        if (returnAt?.index !== undefined) {
+          from = returnAt.index;
+          to = from;
+        }
+      }
+      const prefix = from > 0 && editor.state.doc.sliceString(from - 1, from) !== '\n' ? '\n' : '';
+      const insert = `${prefix}${snippet}\n`;
+      const cursor = from + insert.length;
+      editor.dispatch({ changes: { from, to, insert }, selection: { anchor: cursor }, scrollIntoView: true });
+      editor.focus();
+      userPlacedCursor.current = true;
     },
   }), []);
 
@@ -114,6 +136,7 @@ export const SourceEditor = forwardRef<SourceEditorHandle, {
           diagnosticField,
           keymap.of([{ key: 'Mod-Enter', run: () => { onCompileRef.current(); return true; } }]),
           EditorView.updateListener.of(update => {
+            if (update.selectionSet || update.focusChanged) userPlacedCursor.current = true;
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
           }),
           EditorView.theme({
@@ -155,6 +178,10 @@ export const SourceEditor = forwardRef<SourceEditorHandle, {
   useEffect(() => {
     const editor = view.current;
     if (editor && editor.state.doc.toString() !== value) {
+      // A loaded example/project replaces the editor document outside the
+      // user's insertion point. Let the next library click use the safe
+      // before-return fallback instead of a stale mapped cursor.
+      userPlacedCursor.current = false;
       editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: value } });
     }
   }, [value]);

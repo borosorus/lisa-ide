@@ -1,9 +1,10 @@
 import {
   canonicalWordType, isReadFunction, outputHeadOffsets,
-  type ContractResource, type GraphEndpoint, type GraphNode, type IfBranch, type VisualProject,
+  type ContractResource, type GraphEndpoint, type GraphNode, type VisualProject,
 } from './model';
 import { findFunction } from './ports';
 import { stableOrder, tryOutputGates, validateProject, type GraphDiagnostic } from './validate';
+import { activeNodeIds, pairedElse } from './controlFlow';
 
 /**
  * Deterministic lowering: graph -> readable LISA authoring source.
@@ -45,26 +46,29 @@ interface Context {
 export function generateVisualSource(project: VisualProject): string {
   const diagnostics = validateProject(project);
   if (diagnostics.length > 0) throw new GraphError(diagnostics);
+  const active = activeNodeIds(project);
 
   const ctx: Context = {
     project,
     byId: new Map(project.nodes.map(n => [n.id, n])),
-    feed: new Map(project.edges.map(e => [`${e.to.node}:${e.to.port}`, e.from])),
+    feed: new Map(project.edges.filter(e => e.kind !== 'control' && active.has(e.from.node) && active.has(e.to.node))
+      .map(e => [`${e.to.node}:${e.to.port}`, e.from])),
     usedOutputs: collectUsedOutputs(project),
-    usedSuccess: new Set(project.edges.filter(e => e.from.port === 'success').map(e => e.from.node)),
+    usedSuccess: new Set(project.edges.filter(e => e.kind !== 'control' && active.has(e.from.node) && active.has(e.to.node)
+      && e.from.port === 'success').map(e => e.from.node)),
     tryGates: tryOutputGates(project),
     names: new NamePool(),
   };
 
   const lines: string[] = ['const p = createProgram();'];
+  const { order } = stableOrder(project);
   for (const contract of project.contracts) {
-    if (project.nodes.some(n => n.kind === 'call' && n.contractId === contract.id)) {
+    if (project.nodes.some(n => n.kind === 'call' && n.contractId === contract.id && order.includes(n.id))) {
       const varName = ctx.names.assign(`c_${identifier(contract.name)}`, contractKey(contract));
       push(lines, '', `const ${varName} = "${contract.address.toLowerCase()}";`);
     }
   }
-  const { order } = stableOrder(project);
-  emitScope(ctx, order, undefined, undefined, lines, 0);
+  emitScope(ctx, order, undefined, lines, 0);
   push(lines, '', 'return p;');
   return lines.join('\n');
 }
@@ -81,7 +85,9 @@ function push(lines: string[], ...texts: string[]): void {
 
 function collectUsedOutputs(project: VisualProject): Map<string, number[]> {
   const used = new Map<string, Set<number>>();
+  const active = activeNodeIds(project);
   for (const edge of project.edges) {
+    if (edge.kind === 'control' || !active.has(edge.from.node) || !active.has(edge.to.node)) continue;
     const index = /^out:(\d+)$/.exec(edge.from.port);
     if (index && project.nodes.some(n => n.id === edge.from.node && n.kind === 'call')) {
       const set = used.get(edge.from.node) ?? new Set<number>();
@@ -93,16 +99,13 @@ function collectUsedOutputs(project: VisualProject): Map<string, number[]> {
 }
 
 function emitScope(
-  ctx: Context, order: readonly string[], parent: string | undefined, branch: IfBranch | undefined,
+  ctx: Context, order: readonly string[], parent: string | undefined,
   lines: string[], depth: number,
 ): void {
   const pad = '  '.repeat(depth);
   for (const id of order) {
     const node = ctx.byId.get(id)!;
-    if ((node.parent ?? undefined) !== parent) continue;
-    // Inside a block, branch membership is semantic; legacy children default
-    // to THEN. Positions and frame geometry never take part in emission.
-    if (parent !== undefined && (node.branch ?? 'then') !== branch) continue;
+    if ((node.parent ?? undefined) !== parent || node.kind === 'else') continue;
     if (node.kind === 'call') {
       if (depth === 0) push(lines, '');
       emitCall(ctx, node, lines, pad);
@@ -123,16 +126,16 @@ function emitScope(
           thenBody.push(`${'  '.repeat(depth + 1)}const ${name} = ${handle}.${decoderCall(fn, index)};`);
         }
       }
-      emitScope(ctx, order, id, 'then', thenBody, depth + 1);
+      emitScope(ctx, order, id, thenBody, depth + 1);
       const elseBody: string[] = [];
-      const hasElse = node.kind === 'if' && node.hasElse === true;
-      if (hasElse) emitScope(ctx, order, id, 'else', elseBody, depth + 1);
+      const paired = pairedElse(ctx.project, node.id);
+      if (paired) emitScope(ctx, order, paired.id, elseBody, depth + 1);
       // Empty bodies emit `() => {}` so output stays deterministic and
       // readable; bodies with statements recurse naturally.
       const body = (statements: string[]) =>
         statements.length > 0 ? `() => {\n${statements.join('\n')}\n${pad}}` : '() => {}';
       lines.push(`${pad}p.if(${condition}, ${body(thenBody)}`
-        + `${hasElse ? `, ${body(elseBody)}` : ''});`);
+        + `${paired ? `, ${body(elseBody)}` : ''});`);
     } else if (node.kind === 'keccak') {
       // A digest occupies a slot for as long as its scope lives, so it is a
       // named constant even when nothing consumes it: dropping it would make

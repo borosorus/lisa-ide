@@ -8,23 +8,26 @@ import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import { isValidAddress, parseAbiJson } from './abi';
 import { isReadFunction, type ContractFunction, type ContractResource } from './model';
+import type { AuthoringMode } from './storage';
 
 export const FUNCTION_MIME = 'application/lisa-function';
 
 interface Props {
+  mode: AuthoringMode;
   contracts: readonly ContractResource[];
   onAddContract: (contract: { name: string; address: string; functions: readonly ContractFunction[] }) => void;
   onUpdateContract: (id: string, patch: Partial<Pick<ContractResource, 'name' | 'address'>>) => void;
   onRemoveContract: (id: string) => void;
   /** Click-to-add: place the function's call node at a visible canvas spot. */
   onAddFunction: (contractId: string, signature: string) => void;
+  onInsertFunction: (contract: ContractResource, fn: ContractFunction) => void;
 }
 
 export function shortAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
-export function ContractsPanel({ contracts, onAddContract, onUpdateContract, onRemoveContract, onAddFunction }: Props) {
+export function ContractsPanel({ mode, contracts, onAddContract, onUpdateContract, onRemoveContract, onAddFunction, onInsertFunction }: Props) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 
@@ -40,9 +43,17 @@ export function ContractsPanel({ contracts, onAddContract, onUpdateContract, onR
     <Button size="small" variant="outlined" onClick={() => setDialogOpen(true)} fullWidth startIcon={<AddRoundedIcon fontSize="small" />}>
       Add contract
     </Button>
+    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.75 }}>
+      {mode === 'visual'
+        ? 'Click a function to add its node, or drag it onto the canvas.'
+        : 'Click a function to insert a call template at the editor cursor.'}
+    </Typography>
+    {mode === 'code' && <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+      Removing a contract also removes its visual call nodes.
+    </Typography>}
     {contracts.length === 0 && (
       <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
-        No contracts yet. Add one to place its functions on the canvas.
+        No contracts yet. Add one to use its ABI functions here.
       </Typography>
     )}
     {contracts.map(contract => (
@@ -54,6 +65,8 @@ export function ContractsPanel({ contracts, onAddContract, onUpdateContract, onR
         onPatch={onUpdateContract}
         onRemove={id => { onRemoveContract(id); setExpanded(current => { const next = new Set(current); next.delete(id); return next; }); }}
         onAddFunction={onAddFunction}
+        mode={mode}
+        onInsertFunction={onInsertFunction}
       />
     ))}
     <AddContractDialog
@@ -64,13 +77,15 @@ export function ContractsPanel({ contracts, onAddContract, onUpdateContract, onR
   </Box>;
 }
 
-function ContractRow({ contract, expanded, onToggle, onPatch, onRemove, onAddFunction }: {
+function ContractRow({ contract, expanded, onToggle, onPatch, onRemove, onAddFunction, mode, onInsertFunction }: {
   contract: ContractResource;
   expanded: boolean;
   onToggle: () => void;
   onPatch: Props['onUpdateContract'];
   onRemove: (id: string) => void;
   onAddFunction: Props['onAddFunction'];
+  mode: AuthoringMode;
+  onInsertFunction: Props['onInsertFunction'];
 }) {
   return <Box sx={{ mt: 1 }}>
     <Stack direction="row" alignItems="center" spacing={0.5}>
@@ -93,7 +108,7 @@ function ContractRow({ contract, expanded, onToggle, onPatch, onRemove, onAddFun
     </Stack>
     <Collapse in={expanded} unmountOnExit>
       <AddressEditor contract={contract} onPatch={onPatch} />
-      <FunctionList contract={contract} contractId={contract.id} onAddFunction={onAddFunction} />
+      <FunctionList contract={contract} mode={mode} onAddFunction={onAddFunction} onInsertFunction={onInsertFunction} />
     </Collapse>
   </Box>;
 }
@@ -131,10 +146,11 @@ function AddressEditor({ contract, onPatch }: { contract: ContractResource; onPa
   />;
 }
 
-function FunctionList({ contract, contractId, onAddFunction }: {
+function FunctionList({ contract, mode, onAddFunction, onInsertFunction }: {
   contract: ContractResource;
-  contractId: string;
   onAddFunction: Props['onAddFunction'];
+  mode: AuthoringMode;
+  onInsertFunction: Props['onInsertFunction'];
 }) {
   const [query, setQuery] = useState('');
   const matches = useMemo(() => {
@@ -154,19 +170,21 @@ function FunctionList({ contract, contractId, onAddFunction }: {
       value={query} onChange={e => setQuery(e.target.value)}
       inputProps={{ 'aria-label': `Search functions in ${contract.name}` }}
     />
-    <FunctionGroup label="Read" functions={matches.reads} contractId={contractId} onAddFunction={onAddFunction} />
-    <FunctionGroup label="Write" functions={matches.writes} contractId={contractId} onAddFunction={onAddFunction} />
+    <FunctionGroup label="Read" functions={matches.reads} contract={contract} mode={mode} onAddFunction={onAddFunction} onInsertFunction={onInsertFunction} />
+    <FunctionGroup label="Write" functions={matches.writes} contract={contract} mode={mode} onAddFunction={onAddFunction} onInsertFunction={onInsertFunction} />
     {matches.reads.length + matches.writes.length === 0 && query && (
       <Typography variant="caption" color="text.secondary">No functions match.</Typography>
     )}
   </Box>;
 }
 
-function FunctionGroup({ label, functions, contractId, onAddFunction }: {
+function FunctionGroup({ label, functions, contract, mode, onAddFunction, onInsertFunction }: {
   label: string;
   functions: readonly ContractFunction[];
-  contractId: string;
+  contract: ContractResource;
+  mode: AuthoringMode;
   onAddFunction: Props['onAddFunction'];
+  onInsertFunction: Props['onInsertFunction'];
 }) {
   if (functions.length === 0) return null;
   return <Box sx={{ mt: 0.5 }}>
@@ -176,13 +194,14 @@ function FunctionGroup({ label, functions, contractId, onAddFunction }: {
         key={fn.signature}
         variant="outlined"
         className="function-item"
-        draggable
+        draggable={mode === 'visual'}
         onDragStart={event => {
-          event.dataTransfer.setData(FUNCTION_MIME, JSON.stringify({ contractId, signature: fn.signature }));
+          if (mode !== 'visual') return;
+          event.dataTransfer.setData(FUNCTION_MIME, JSON.stringify({ contractId: contract.id, signature: fn.signature }));
           event.dataTransfer.effectAllowed = 'copy';
         }}
-        onClick={() => onAddFunction(contractId, fn.signature)}
-        title={`Click to add to the canvas, or drag onto it: ${fn.signature}`}
+        onClick={() => mode === 'visual' ? onAddFunction(contract.id, fn.signature) : onInsertFunction(contract, fn)}
+        title={mode === 'visual' ? `Click to add to the canvas, or drag onto it: ${fn.signature}` : `Insert ${isReadFunction(fn) ? 'staticCall' : 'call'} snippet: ${fn.signature}`}
         role="button"
         aria-label={fn.signature}
       >

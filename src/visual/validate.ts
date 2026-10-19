@@ -2,7 +2,8 @@ import {
   inputPorts, outputPorts, canConnect, type PortSpec,
 } from './ports';
 import { isBytesHex } from '../compile/hex';
-import { isValidLiteral, type GraphNode, type IfBranch, type VisualProject } from './model';
+import { isValidLiteral, type GraphNode, type VisualProject } from './model';
+import { activeNodeIds, isContainer, pairedElse, validElsePair } from './controlFlow';
 
 /**
  * Graph-level validation and deterministic ordering, run before lowering.
@@ -41,6 +42,7 @@ export function indexDiagnostics(diagnostics: readonly GraphDiagnostic[]): Reado
 
 export function validateProject(project: VisualProject): GraphDiagnostic[] {
   const diagnostics: GraphDiagnostic[] = [];
+  const active = activeNodeIds(project);
   const byId = new Map<string, GraphNode>();
   for (const node of project.nodes) {
     if (byId.has(node.id)) diagnostics.push({ node: node.id, message: `Duplicate node id: ${node.id}` });
@@ -63,25 +65,16 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
       chain.add(parent);
       const parentIf = byId.get(parent);
       if (!parentIf) {
-        diagnostics.push({ node: node.id, message: 'Belongs to a missing IF block' });
+        diagnostics.push({ node: node.id, message: 'Belongs to a missing container' });
         break;
       }
-      if (parentIf.kind !== 'if') {
-        diagnostics.push({ node: node.id, message: `Parent "${parent}" is not an IF block` });
+      if (!isContainer(parentIf)) {
+        diagnostics.push({ node: node.id, message: `Parent "${parent}" is not a container` });
         break;
       }
       parent = parentIf.parent;
     }
-    // Branch invariants: membership is semantic and only exists inside a block.
-    if (node.parent === undefined && node.branch !== undefined) {
-      diagnostics.push({ node: node.id, message: 'Names an IF branch without belonging to an IF block' });
-    }
-    if (node.branch === 'else') {
-      const directParent = node.parent === undefined ? undefined : byId.get(node.parent);
-      if (directParent?.kind === 'if' && directParent.hasElse !== true) {
-        diagnostics.push({ node: node.id, message: 'Sits in an ELSE branch, but its IF block has no ELSE' });
-      }
-    }
+    if (!active.has(node.id)) continue;
     if (node.kind === 'call') {
       const contract = project.contracts.find(c => c.id === node.contractId);
       if (!contract) diagnostics.push({ node: node.id, message: 'References a missing contract resource' });
@@ -108,11 +101,24 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
     const target = byId.get(edge.to.node);
     if (!source) { diagnostics.push({ node: edge.to.node, message: `Edge source node "${edge.from.node}" is missing` }); continue; }
     if (!target) { diagnostics.push({ node: edge.from.node, message: `Edge target node "${edge.to.node}" is missing` }); continue; }
+    if (edge.kind === 'control') {
+      if (!validElsePair(project, edge)) diagnostics.push({ node: target.id, port: edge.to.port,
+        message: 'Control connections must pair one sibling IF with one ELSE container' });
+      else drivers.set(`${target.id}:${edge.to.port}`, (drivers.get(`${target.id}:${edge.to.port}`) ?? 0) + 1);
+      continue;
+    }
+    if (!active.has(target.id)) continue;
+    if (!active.has(source.id)) {
+      diagnostics.push({ node: target.id, port: edge.to.port, message: 'Cannot use a node from an ELSE container that is not connected to an IF' });
+      continue;
+    }
     const sourcePort = outputPorts(source, project).find(p => p.name === edge.from.port);
     const targetPort = inputPorts(target, project).find(p => p.name === edge.to.port);
     if (!sourcePort) { diagnostics.push({ node: source.id, port: edge.from.port, message: `Output port "${edge.from.port}" no longer exists` }); continue; }
     if (!targetPort) { diagnostics.push({ node: target.id, port: edge.to.port, message: `Input port "${edge.to.port}" no longer exists` }); continue; }
-    if (sourcePort.connectable === false || targetPort.connectable === false) {
+    if (sourcePort.kind === 'control' || targetPort.kind === 'control') {
+      diagnostics.push({ node: target.id, port: edge.to.port, message: 'IF/ELSE links must use a control connection' });
+    } else if (sourcePort.connectable === false || targetPort.connectable === false) {
       diagnostics.push({
         node: target.id, port: edge.to.port,
         message: `Cannot connect through ${sourcePort.name}: ${sourcePort.reason ?? 'port is not connectable'}`,
@@ -135,6 +141,7 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
   const live = emittedReach(project);
 
   for (const node of project.nodes) {
+    if (!active.has(node.id)) continue;
     for (const port of inputPorts(node, project)) {
       const count = drivers.get(`${node.id}:${port.name}`) ?? 0;
       if (count > 1) diagnostics.push({ node: node.id, port: port.name, message: `${port.label} has ${count} inputs; connect exactly one` });
@@ -161,19 +168,21 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
 /** The IF whose successful arm owns each try-call's decoded ABI outputs. */
 export function tryOutputGates(project: VisualProject): Map<string, string> {
   const byId = new Map(project.nodes.map(node => [node.id, node]));
+  const active = activeNodeIds(project);
   const gates = new Map<string, string>();
   for (const call of project.nodes) {
-    if (call.kind !== 'call' || call.failureMode !== 'continue') continue;
-    const outputEdges = project.edges.filter(edge => edge.from.node === call.id && /^out:\d+$/.test(edge.from.port));
+    if (!active.has(call.id) || call.kind !== 'call' || call.failureMode !== 'continue') continue;
+    const outputEdges = project.edges.filter(edge => edge.kind !== 'control' && edge.from.node === call.id
+      && active.has(edge.to.node) && /^out:\d+$/.test(edge.from.port));
     if (outputEdges.length === 0) continue;
     const candidates = project.edges
-      .filter(edge => edge.from.node === call.id && edge.from.port === 'success'
+      .filter(edge => edge.kind !== 'control' && edge.from.node === call.id && edge.from.port === 'success'
         && edge.to.port === 'condition' && byId.get(edge.to.node)?.kind === 'if')
       .map(edge => byId.get(edge.to.node)!)
       .sort((a, b) => scopeChain(a, byId).length - scopeChain(b, byId).length);
     const gate = candidates.find(candidate => outputEdges.every(edge => {
       const target = byId.get(edge.to.node);
-      return target && scopeChain(target, byId).some(scope => scope.id === candidate.id && scope.branch === 'then');
+      return target && active.has(target.id) && scopeChain(target, byId).includes(candidate.id);
     }));
     if (gate) gates.set(call.id, gate.id);
   }
@@ -184,9 +193,11 @@ function validateTryResults(project: VisualProject): GraphDiagnostic[] {
   const diagnostics: GraphDiagnostic[] = [];
   const gates = tryOutputGates(project);
   const byId = new Map(project.nodes.map(node => [node.id, node]));
+  const active = activeNodeIds(project);
   for (const call of project.nodes) {
-    if (call.kind !== 'call' || call.failureMode !== 'continue') continue;
-    const outputEdges = project.edges.filter(edge => edge.from.node === call.id && /^out:\d+$/.test(edge.from.port));
+    if (!active.has(call.id) || call.kind !== 'call' || call.failureMode !== 'continue') continue;
+    const outputEdges = project.edges.filter(edge => edge.kind !== 'control' && edge.from.node === call.id
+      && active.has(edge.to.node) && /^out:\d+$/.test(edge.from.port));
     if (outputEdges.length > 0 && !gates.has(call.id)) {
       for (const edge of outputEdges) {
         diagnostics.push({ node: edge.to.node, port: edge.to.port,
@@ -206,18 +217,19 @@ function validateTryResults(project: VisualProject): GraphDiagnostic[] {
   // Walk the same scope and statement order used by source generation. Any
   // outbound call replaces returndata; an IF preserves it past the join only
   // when both paths leave the same call as the most recent one.
-  function visitScope(parent: string | undefined, branch: IfBranch | undefined, incoming: string | null): string | null {
+  function visitScope(parent: string | undefined, incoming: string | null): string | null {
     let live = incoming;
     for (const id of order) {
       const node = byId.get(id)!;
-      if (node.parent !== parent || (parent !== undefined && (node.branch ?? 'then') !== branch)) continue;
+      if (!active.has(node.id) || node.parent !== parent || node.kind === 'else') continue;
       if (node.kind === 'if') {
         for (const callId of gatesByIf.get(node.id) ?? []) {
           if (live !== callId) diagnostics.push({ node: node.id, port: 'condition',
             message: `Return data from ${callId} was replaced before its success branch; move that IF before other calls` });
         }
-        const thenLive = visitScope(node.id, 'then', live);
-        const elseLive = node.hasElse ? visitScope(node.id, 'else', live) : live;
+        const thenLive = visitScope(node.id, live);
+        const paired = pairedElse(project, node.id);
+        const elseLive = paired ? visitScope(paired.id, live) : live;
         live = thenLive === elseLive ? thenLive : null;
       } else if (node.kind === 'call' || node.kind === 'rawcall' || node.kind === 'send') {
         live = node.id;
@@ -225,7 +237,7 @@ function validateTryResults(project: VisualProject): GraphDiagnostic[] {
     }
     return live;
   }
-  visitScope(undefined, undefined, null);
+  visitScope(undefined, null);
   return diagnostics;
 }
 
@@ -238,7 +250,7 @@ const EMITTING = new Set<GraphNode['kind']>(['call', 'if', 'guard', 'keccak', 's
  * optional — an empty transfer is a mistake, not a call.
  */
 function portIsOptional(node: GraphNode, port: string): boolean {
-  return port === 'value' && (node.kind === 'call' || node.kind === 'rawcall');
+  return port === 'if' || (port === 'value' && (node.kind === 'call' || node.kind === 'rawcall'));
 }
 
 /**
@@ -249,12 +261,14 @@ function portIsOptional(node: GraphNode, port: string): boolean {
 function emittedReach(project: VisualProject): Set<string> {
   const inputs = new Map<string, string[]>();
   for (const edge of project.edges) {
+    if (edge.kind === 'control') continue;
     const sources = inputs.get(edge.to.node);
     if (sources) sources.push(edge.from.node);
     else inputs.set(edge.to.node, [edge.from.node]);
   }
   const reached = new Set<string>();
-  const pending = project.nodes.filter(node => EMITTING.has(node.kind)).map(node => node.id);
+  const active = activeNodeIds(project);
+  const pending = project.nodes.filter(node => active.has(node.id) && node.kind !== 'else' && EMITTING.has(node.kind)).map(node => node.id);
   while (pending.length > 0) {
     const id = pending.pop()!;
     if (reached.has(id)) continue;
@@ -270,19 +284,29 @@ function emittedReach(project: VisualProject): Set<string> {
  * canvas positions.
  */
 export function stableOrder(project: VisualProject): { order: string[]; cycle: string[] } {
-  const byId = new Map(project.nodes.map(n => [n.id, n]));
-  const deps = new Map<string, Set<string>>(project.nodes.map(n => [n.id, new Set<string>()]));
+  const active = activeNodeIds(project);
+  const nodes = project.nodes.filter(node => active.has(node.id));
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const deps = new Map<string, Set<string>>(nodes.map(n => [n.id, new Set<string>()]));
   for (const edge of project.edges) {
+    if (edge.kind === 'control') continue;
     if (edge.from.node === edge.to.node) continue;
     if (!byId.has(edge.from.node) || !byId.has(edge.to.node)) continue;
     deps.get(edge.to.node)?.add(edge.from.node);
+  }
+  // The parent IF waits for producers inside both bodies, while the paired
+  // ELSE itself is emitted only inside that IF and is never a root statement.
+  for (const node of nodes) {
+    if (node.kind !== 'if') continue;
+    const paired = pairedElse(project, node.id);
+    if (paired && active.has(paired.id)) deps.get(node.id)?.add(paired.id);
   }
   // A body node's constants are emitted inside its IF statement, so the IF
   // block itself must wait for everything its body depends on.
   let changed = true;
   while (changed) {
     changed = false;
-    for (const node of project.nodes) {
+    for (const node of nodes) {
       if (!node.parent) continue;
       const set = deps.get(node.parent);
       const own = deps.get(node.id);
@@ -293,28 +317,26 @@ export function stableOrder(project: VisualProject): { order: string[]; cycle: s
   }
   const done = new Set<string>();
   const order: string[] = [];
-  while (order.length < project.nodes.length) {
-    const next = project.nodes.find(n => !done.has(n.id) && [...deps.get(n.id)!].every(d => done.has(d)));
+  while (order.length < nodes.length) {
+    const next = nodes.find(n => !done.has(n.id) && [...deps.get(n.id)!].every(d => done.has(d)));
     if (!next) break;
     done.add(next.id);
     order.push(next.id);
   }
-  return { order, cycle: project.nodes.filter(n => !done.has(n.id)).map(n => n.id) };
+  return { order, cycle: nodes.filter(n => !done.has(n.id)).map(n => n.id) };
 }
 
 /** IF scopes enclosing a node, outermost first, each identified by block + branch.
  *  A nested IF belongs to its parent's branch; its own THEN/ELSE entries appear
  *  only in the chains of nodes inside its body. Children saved before ELSE
  *  existed carry no branch and count as THEN. */
-export function scopeChain(node: GraphNode, byId: Map<string, GraphNode>): { id: string; branch: IfBranch }[] {
-  const chain: { id: string; branch: IfBranch }[] = [];
-  let child: GraphNode = node;
+export function scopeChain(node: GraphNode, byId: Map<string, GraphNode>): string[] {
+  const chain: string[] = [];
   let parent = node.parent;
   const guard = new Set<string>([node.id]);
   while (parent !== undefined && !guard.has(parent)) {
     guard.add(parent);
-    chain.push({ id: parent, branch: child.branch === 'else' ? 'else' : 'then' });
-    child = byId.get(parent) ?? child;
+    chain.push(parent);
     parent = byId.get(parent)?.parent;
   }
   return chain.reverse();
@@ -332,12 +354,10 @@ export function scopeViolation(source: GraphNode, target: GraphNode, byId: Map<s
   const targetScope = scopeChain(target, byId);
   const shared = Math.min(sourceScope.length, targetScope.length);
   for (let i = 0; i < shared; i++) {
-    if (sourceScope[i].id !== targetScope[i].id || sourceScope[i].branch !== targetScope[i].branch) {
-      return 'Value was produced in a different IF branch; branches are separate scopes and never share values';
-    }
+    if (sourceScope[i] !== targetScope[i]) return 'Value was produced in a different container scope; sibling scopes never share values';
   }
   if (sourceScope.length > targetScope.length) {
-    return 'Value produced inside an IF block cannot be used outside that block';
+    return 'Value produced inside a branch container cannot be used outside that container';
   }
   return undefined;
 }

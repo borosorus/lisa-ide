@@ -25,6 +25,7 @@ export function nodeSize(node: GraphNode, project: VisualProject): Size {
       return { width: 250, height: Math.max(141, 129 + rows * 29) };
     }
     case 'if':
+    case 'else':
       return project.frameSizes?.[node.id] ?? IF_DEFAULT_SIZE;
     case 'binary':
       // Two input rows plus the operator row carrying the output.

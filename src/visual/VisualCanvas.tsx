@@ -3,6 +3,8 @@ import {
   Background, Controls, Panel, ReactFlow, ReactFlowProvider, useReactFlow,
   type Connection, type Edge, type Node,
 } from '@xyflow/react';
+import { Button, Tooltip } from '@mui/material';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import '@xyflow/react/dist/style.css';
 import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
@@ -10,6 +12,7 @@ import { absolutePosition, iframes, normalizeDrag } from './containment';
 import { indexDiagnostics, type GraphDiagnostic } from './validate';
 import { tokens } from '../theme/tokens';
 import type { GraphNode, IfFrameSize, ScopeTarget, Vec2, VisualProject } from './model';
+import { canPairElse, isContainer } from './controlFlow';
 import { FUNCTION_MIME } from './ContractsPanel';
 
 const nodeTypes = { lisa: LisaNode };
@@ -33,20 +36,17 @@ export interface VisualCanvasProps {
   onSetFailureMode?(id: string, mode: 'revert' | 'continue'): string | undefined;
   /** Committed IF frame resize; presentation metadata only. */
   onResizeIf?(id: string, size: IfFrameSize): void;
-  /** Enable the ELSE branch of an IF block; semantic, one-way in this pass. */
-  onEnableElse?(id: string): void;
-  /** Click on a branch region: UI-only selection of the spawn target branch. */
-  onSelectBranch?(nodeId: string, branch: 'then' | 'else'): void;
-  /** UI-only spawn target: the branch region most recently selected. */
-  selectedBranch?: { nodeId: string; branch: 'then' | 'else' } | null;
   onSelectNode(id: string | null): void;
   onSelectEdge(id: string | null): void;
+  onDuplicateSelected(): void;
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
   /** validateProject() findings; rendered on the nodes they belong to. */
   diagnostics?: readonly GraphDiagnostic[];
-  /** Last added node; the view pans to keep new nodes discoverable. */
+  /** Node to reveal; nested nodes reveal their containing frame. */
   focusNodeId?: string | null;
+  /** Monotonic token so selecting the same node repeatedly can reveal it again. */
+  focusRequest?: number;
   /** Host handle for click-to-add placement in the visible viewport. */
   canvasApi?: React.MutableRefObject<CanvasApi | null>;
 }
@@ -63,7 +63,7 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onEnableElse, onSelectBranch, selectedBranch, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, diagnostics, focusNodeId, canvasApi,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, onDuplicateSelected, diagnostics, focusNodeId, focusRequest, canvasApi,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -89,7 +89,7 @@ function Canvas({
    * The project is canonical and React Flow is a controlled projection, so
    * xyflow's internal selection-based delete (which needs onNodesChange to
    * round-trip changes) is disabled; deletion follows our own selection.
-   * Focused form controls (inputs, selects) keep their keystrokes.
+   * Focused form controls and the node menu keep their keystrokes.
    */
   const deleteRef = useRef({ selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges });
   deleteRef.current = { selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges };
@@ -98,7 +98,8 @@ function Canvas({
       if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       const target = event.target as HTMLElement | null;
       if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
-          || target instanceof HTMLSelectElement || target.isContentEditable)) return;
+          || target instanceof HTMLSelectElement || target.isContentEditable
+          || target.closest('[data-node-menu]')) || document.querySelector('[data-node-menu]')) return;
       const selection = deleteRef.current;
       if (selection.selectedNodeId) {
         event.preventDefault();
@@ -138,12 +139,11 @@ function Canvas({
         node, project, frame,
         errors: errorsByNode.get(node.id),
         selected: node.id === selectedNodeId,
-        selectedBranch: selectedBranch?.nodeId === node.id ? selectedBranch.branch : undefined,
       };
       // Container frames live behind cards so they never swallow a drag that
       // starts on an overlapping node; children always outrank their frame.
-      const zIndex = node.kind === 'if' ? 1 : 10;
-      const parentOk = node.parent !== undefined && project.nodes.some(n => n.id === node.parent && n.kind === 'if');
+      const zIndex = isContainer(node) ? 1 : 10;
+      const parentOk = node.parent !== undefined && project.nodes.some(n => n.id === node.parent && isContainer(n));
       if (!parentOk || node.parent === undefined) {
         return {
           id: node.id, type: 'lisa', position, zIndex, selected: node.id === selectedNodeId,
@@ -163,7 +163,7 @@ function Canvas({
         data,
       };
     });
-  }, [project, frames, errorsByNode, selectedNodeId, selectedBranch]);
+  }, [project, frames, errorsByNode, selectedNodeId]);
 
   const edges = useMemo<Edge[]>(() => project.edges.map(edge => ({
     id: edge.id,
@@ -171,15 +171,14 @@ function Canvas({
     sourceHandle: edge.from.port,
     target: edge.to.node,
     targetHandle: edge.to.port,
+    ...(edge.kind === 'control' ? { type: 'smoothstep', className: 'if-else-edge' } : {}),
   })), [project.edges]);
 
   const editApi = useMemo<NodeEditApi>(() => ({
     patch: onPatchNode,
     resize: onResizeIf,
-    enableElse: onEnableElse,
-    selectBranch: onSelectBranch,
     setFailureMode: onSetFailureMode,
-  }), [onPatchNode, onResizeIf, onEnableElse, onSelectBranch, onSetFailureMode]);
+  }), [onPatchNode, onResizeIf, onSetFailureMode]);
 
   const nodesRef = useRef(project.nodes);
   nodesRef.current = project.nodes;
@@ -188,10 +187,17 @@ function Canvas({
   const rfNodesRef = useRef<Node[]>([]);
   rfNodesRef.current = nodes;
   useEffect(() => {
-    if (focusNodeId && nodesRef.current.some(n => n.id === focusNodeId)) {
-      void fitView({ nodes: [{ id: focusNodeId }], maxZoom: 1, duration: 250 });
+    if (focusNodeId) {
+      const byId = new Map(nodesRef.current.map(node => [node.id, node] as const));
+      let target = byId.get(focusNodeId);
+      const seen = new Set<string>();
+      while (target?.parent && !seen.has(target.id)) {
+        seen.add(target.id);
+        target = byId.get(target.parent) ?? target;
+      }
+      if (target) void fitView({ nodes: [{ id: target.id }], maxZoom: 1, duration: 250 });
     }
-  }, [focusNodeId, fitView]);
+  }, [focusNodeId, focusRequest, fitView]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
@@ -216,6 +222,9 @@ function Canvas({
     if (!source || !target || connection.source === connection.target) return false;
     const sourcePort = portsForNode(source, project).outputs.find(p => p.name === connection.sourceHandle);
     const targetPort = portsForNode(target, project).inputs.find(p => p.name === connection.targetHandle);
+    if (sourcePort?.kind === 'control' || targetPort?.kind === 'control') {
+      return sourcePort?.kind === 'control' && targetPort?.kind === 'control' && canPairElse(project, source.id, target.id);
+    }
     return !!sourcePort && !!targetPort && canConnect(sourcePort, targetPort);
   }, [project]);
 
@@ -275,6 +284,23 @@ function Canvas({
       >
         <Background color={tokens.canvas.grid} gap={24} />
         <Controls showInteractive={false} />
+        {selectedNodeId !== null && project.nodes.some(node => node.id === selectedNodeId) && (
+          <Panel position="top-right" className="canvas-selection-actions">
+            <Tooltip title="Duplicate selected node or IF block">
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<ContentCopyRoundedIcon />}
+                onClick={event => {
+                  event.stopPropagation();
+                  onDuplicateSelected();
+                }}
+              >
+                Duplicate
+              </Button>
+            </Tooltip>
+          </Panel>
+        )}
         {project.nodes.length === 0 && (
           <Panel position="top-center">
             <div className="canvas-empty-hint">Drag a contract function here, or click one in the library.</div>

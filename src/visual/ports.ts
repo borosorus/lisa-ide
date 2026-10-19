@@ -51,6 +51,8 @@ export function inputPorts(node: GraphNode, project: VisualProject): PortSpec[] 
       return [{ name: 'condition', kind: 'condition', label: 'unless' }];
     case 'if':
       return [{ name: 'condition', kind: 'condition', label: 'if' }];
+    case 'else':
+      return [{ name: 'if', kind: 'control', label: 'IF' }];
     default:
       return [];
   }
@@ -106,6 +108,8 @@ export function outputPorts(node: GraphNode, project: VisualProject): PortSpec[]
     case 'guard':
       return [];
     case 'if':
+      return [{ name: 'else', kind: 'control', label: 'else' }];
+    case 'else':
       return [];
   }
 }
@@ -127,6 +131,7 @@ export function isStaticCall(node: Extract<GraphNode, { kind: 'call' }>, project
  */
 export function canConnect(source: PortSpec, target: PortSpec): boolean {
   if (source.connectable === false || target.connectable === false) return false;
+  if (source.kind === 'control' || target.kind === 'control') return source.kind === 'control' && target.kind === 'control';
   switch (target.kind) {
     case 'address': return source.kind === 'address';
     case 'bool': return source.kind === 'bool' || source.kind === 'value';

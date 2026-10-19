@@ -3,6 +3,7 @@ import {
   type GraphNode, type IfBranch, type IfFrameSize, type ScopeTarget, type Vec2, type VisualProject,
 } from './model';
 import { nodeSize, spawnPositionInBounds, type Rect, type Size } from './spawnPosition';
+import { isContainer, pairedElse, pairedIf } from './controlFlow';
 
 /**
  * Presentation-only geometry for IF containers. The semantic `parent` +
@@ -41,13 +42,13 @@ export interface Frame {
   readonly depth: number;
 }
 
-/** Rendered IF head: card padding + kind row + condition port row (~55px). */
-export const IF_HEADER = 64;
-/** THEN/ELSE label strip height (chip + breathing room). */
+/** Container header space for the title, control handle, and connection state. */
+export const IF_HEADER = 96;
+/** @deprecated Legacy branch marker sizing; kept for older test fixtures. */
 export const BRANCH_HEADER = 28;
 /** Safe-content inset from every zone border. */
 export const IF_PADDING = 16;
-/** Comfortable minimum width per branch once ELSE splits the body. */
+/** @deprecated The canvas no longer splits an IF frame into side-by-side branches. */
 export const ELSE_MIN_BRANCH_WIDTH = 320;
 /** Gap left between a pushed-out unscoped node and the frame it clears. */
 export const OUTSIDE_GAP = 24;
@@ -70,33 +71,16 @@ export function scopeDepth(project: VisualProject, nodeId: string): number {
 /** Zones of a frame rect: header, branch strips, padded safe bodies. The
  *  divider is always the frame's horizontal midpoint (§9: derived from
  *  frame width, never from where children happen to sit). */
-export function frameZones(rect: Rect, hasElse: boolean): Omit<Frame, 'id' | 'depth'> {
+export function frameZones(rect: Rect, _hasElse = false): Omit<Frame, 'id' | 'depth'> {
   const top = rect.y + IF_HEADER;
-  const height = Math.max(rect.height - IF_HEADER - BRANCH_HEADER - IF_PADDING, 1);
-  if (!hasElse) {
-    return {
-      rect,
-      header: { x: rect.x, y: rect.y, width: rect.width, height: IF_HEADER },
-      thenHeader: { x: rect.x, y: top, width: rect.width, height: BRANCH_HEADER },
-      thenBody: {
-        x: rect.x + IF_PADDING, y: top + BRANCH_HEADER,
-        width: Math.max(rect.width - IF_PADDING * 2, 1), height,
-      },
-    };
-  }
-  const half = rect.width / 2;
+  const height = Math.max(rect.height - IF_HEADER - IF_PADDING, 1);
   return {
     rect,
     header: { x: rect.x, y: rect.y, width: rect.width, height: IF_HEADER },
-    thenHeader: { x: rect.x, y: top, width: half, height: BRANCH_HEADER },
-    elseHeader: { x: rect.x + half, y: top, width: rect.width - half, height: BRANCH_HEADER },
+    thenHeader: { x: rect.x, y: top, width: rect.width, height: 0 },
     thenBody: {
-      x: rect.x + IF_PADDING, y: top + BRANCH_HEADER,
-      width: Math.max(half - IF_PADDING * 2, 1), height,
-    },
-    elseBody: {
-      x: rect.x + half + IF_PADDING, y: top + BRANCH_HEADER,
-      width: Math.max(rect.width - half - IF_PADDING * 2, 1), height,
+      x: rect.x + IF_PADDING, y: top,
+      width: Math.max(rect.width - IF_PADDING * 2, 1), height,
     },
   };
 }
@@ -113,7 +97,7 @@ export function frameZones(rect: Rect, hasElse: boolean): Omit<Frame, 'id' | 'de
 export function iframes(project: VisualProject): Map<string, Frame> {
   const frames = new Map<string, Frame>();
   const anchorOf = (id: string): Vec2 => project.positions[id] ?? { x: 0, y: 0 };
-  const ifNodes = project.nodes.filter(n => n.kind === 'if');
+  const ifNodes = project.nodes.filter(isContainer);
   const depths = new Map<string, number>();
   for (const node of ifNodes) depths.set(node.id, scopeDepth(project, node.id));
   // Children before parents: a parent frame must see nested effective sizes.
@@ -122,46 +106,32 @@ export function iframes(project: VisualProject): Map<string, Frame> {
   for (const node of ordered) {
     const anchor = anchorOf(node.id);
     const stored = clampFrameSize(project.frameSizes?.[node.id] ?? IF_DEFAULT_SIZE);
-    const hasElse = node.hasElse === true;
     let right = anchor.x + stored.width;
     let bottom = anchor.y + stored.height;
-    let thenRight = anchor.x;
-    let elseRight = anchor.x;
     let maxChildWidth = 0;
     let maxChildHeight = 0;
     for (const child of project.nodes) {
       if (child.parent !== node.id) continue;
       const position = anchorOf(child.id);
-      const size: Size = child.kind === 'if'
+      const size: Size = isContainer(child)
         ? effective.get(child.id) ?? storedSizeOf(project, child)
         : nodeSize(child, project);
       maxChildWidth = Math.max(maxChildWidth, size.width);
       maxChildHeight = Math.max(maxChildHeight, size.height);
       right = Math.max(right, position.x + size.width + IF_PADDING);
       bottom = Math.max(bottom, position.y + size.height + IF_PADDING);
-      if (hasElse && child.branch === 'else') elseRight = Math.max(elseRight, position.x + size.width + IF_PADDING);
-      else thenRight = Math.max(thenRight, position.x + size.width + IF_PADDING);
     }
-    let width = Math.max(right - anchor.x, IF_MIN_SIZE.width);
-    if (hasElse) {
-      width = Math.max(
-        width,
-        2 * ELSE_MIN_BRANCH_WIDTH,
-        2 * (thenRight - anchor.x),
-        elseRight - anchor.x,
-        2 * (maxChildWidth + IF_PADDING * 2),
-      );
-    }
+    const width = Math.max(right - anchor.x, IF_MIN_SIZE.width, maxChildWidth + IF_PADDING * 2);
     const height = Math.max(
       bottom - anchor.y,
       IF_MIN_SIZE.height,
-      IF_HEADER + BRANCH_HEADER + IF_PADDING * 2 + maxChildHeight,
+      IF_HEADER + IF_PADDING * 2 + maxChildHeight,
     );
     const size: IfFrameSize = { width, height };
     effective.set(node.id, size);
     frames.set(node.id, {
       id: node.id,
-      ...frameZones({ x: anchor.x, y: anchor.y, width: size.width, height: size.height }, hasElse),
+      ...frameZones({ x: anchor.x, y: anchor.y, width: size.width, height: size.height }),
       depth: depths.get(node.id) ?? 0,
     });
   }
@@ -169,14 +139,12 @@ export function iframes(project: VisualProject): Map<string, Frame> {
 }
 
 function storedSizeOf(project: VisualProject, ifNode: GraphNode): IfFrameSize {
-  return ifNode.kind === 'if'
-    ? clampFrameSize(project.frameSizes?.[ifNode.id] ?? IF_DEFAULT_SIZE)
-    : IF_DEFAULT_SIZE;
+  return isContainer(ifNode) ? clampFrameSize(project.frameSizes?.[ifNode.id] ?? IF_DEFAULT_SIZE) : IF_DEFAULT_SIZE;
 }
 
 /** Rendered size of any node: IFs at their effective frame, rest per card. */
 export function effectiveSize(project: VisualProject, node: GraphNode, frames = iframes(project)): Size {
-  if (node.kind !== 'if') return nodeSize(node, project);
+  if (!isContainer(node)) return nodeSize(node, project);
   const frame = frames.get(node.id);
   return frame ? { width: frame.rect.width, height: frame.rect.height } : nodeSize(node, project);
 }
@@ -235,9 +203,8 @@ export function expandIfFrames(project: VisualProject): VisualProject {
       }
       const frame = frames.get(node.parent);
       const parent = next.nodes.find(n => n.id === node.parent);
-      if (!frame || parent?.kind !== 'if') continue;
-      const body = node.branch === 'else' && parent.hasElse === true ? frame.elseBody ?? frame.thenBody : frame.thenBody;
-      const clamped = clampInto(at, size, body);
+      if (!frame || !parent || !isContainer(parent)) continue;
+      const clamped = clampInto(at, size, frame.thenBody);
       if (clamped.x === at.x && clamped.y === at.y) continue;
       shift(node.id, { x: clamped.x - at.x, y: clamped.y - at.y });
       moved = true;
@@ -276,24 +243,21 @@ export function spawnInsideIf(params: {
 }): { position: Vec2; frameSize: IfFrameSize } | null {
   const { project, frameId, branch, size } = params;
   const node = project.nodes.find(n => n.id === frameId);
-  if (!node || node.kind !== 'if') return null;
-  if (branch === 'else' && node.hasElse !== true) return null;
+  if (!node || !isContainer(node)) return null;
   const frame = iframes(project).get(frameId);
   if (!frame) return null;
   const anchor = project.positions[frameId] ?? { x: 0, y: 0 };
-  const hasElse = node.hasElse === true;
   const skip = containerSkipSet(project, frameId);
   const occupied = occupiedRects(project).filter(rect => !skip.has(rect.id));
   let width = frame.rect.width;
   let height = frame.rect.height;
   const boundsFor = (): Rect => {
-    const zones = frameZones({ x: anchor.x, y: anchor.y, width, height }, hasElse);
-    return branch === 'else' ? zones.elseBody ?? zones.thenBody : zones.thenBody;
+    return frameZones({ x: anchor.x, y: anchor.y, width, height }).thenBody;
   };
   // Guarantee one slot geometrically fits before searching for emptiness,
   // so a selected IF never silently loses the node to a viewport fallback.
-  height = Math.max(height, size.height + IF_HEADER + BRANCH_HEADER + IF_PADDING * 2);
-  if (hasElse) width = Math.max(width, 2 * (size.width + IF_PADDING * 2));
+  height = Math.max(height, size.height + IF_HEADER + IF_PADDING * 2);
+  width = Math.max(width, size.width + IF_PADDING * 2);
   if (params.anchor) {
     const dropped = spawnPositionInBounds({ anchor: params.anchor, size, occupied, bounds: boundsFor() });
     if (dropped) return { position: dropped, frameSize: { width, height } };
@@ -304,7 +268,7 @@ export function spawnInsideIf(params: {
     const anchorPoint = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
     const position = spawnPositionInBounds({ anchor: anchorPoint, size, occupied, bounds });
     if (position) return { position, frameSize: { width, height } };
-    width += hasElse ? 2 * (size.width + 40) : size.width + 40;
+    width += size.width + 40;
     height += size.height + 40;
   }
   return null;
@@ -323,11 +287,11 @@ function containerSkipSet(project: VisualProject, frameId: string): Set<string> 
   return skip;
 }
 
-/** Rects of every node — IFs at their effective frames — for occupancy. */
+/** Rects of every node — IF/ELSE containers at their effective frames. */
 export function occupiedRects(project: VisualProject): (Rect & { id: string })[] {
   const frames = iframes(project);
   return project.nodes.map(node => {
-    const frame = node.kind === 'if' ? frames.get(node.id) : undefined;
+    const frame = isContainer(node) ? frames.get(node.id) : undefined;
     const position = project.positions[node.id] ?? { x: 0, y: 0 };
     if (frame) return { id: node.id, ...frame.rect };
     const size = nodeSize(node, project);
@@ -357,11 +321,10 @@ export function containmentTarget(params: {
   const center = { x: params.movedRect.x + params.movedRect.width / 2, y: params.movedRect.y + params.movedRect.height / 2 };
   let best: { frame: Frame; branch: IfBranch } | undefined;
   for (const frame of params.frames) {
-    const bodyTop = frame.rect.y + IF_HEADER + BRANCH_HEADER;
-    if (center.x < frame.rect.x || center.x > frame.rect.x + frame.rect.width) continue;
-    if (center.y < bodyTop || center.y > frame.rect.y + frame.rect.height) continue;
-    const divider = frame.elseHeader ? frame.rect.x + frame.rect.width / 2 : Number.POSITIVE_INFINITY;
-    const branch: IfBranch = center.x < divider ? 'then' : frame.elseHeader ? 'else' : 'then';
+    const body = frame.thenBody;
+    if (center.x < body.x || center.x > body.x + body.width) continue;
+    if (center.y < body.y || center.y > body.y + body.height) continue;
+    const branch: IfBranch = 'then';
     if (!best || frame.depth > best.frame.depth
         || (frame.depth === best.frame.depth
             && (frame.id === best.frame.id ? branch === 'then' : frame.id < best.frame.id))) {
@@ -402,8 +365,7 @@ export function resolveNodeDrop(params: {
   const scope = containmentTarget({ movedRect, frames: obstacles }) ?? null;
   if (scope !== null) {
     const frame = obstacles.find(f => f.id === scope.parent)!;
-    const body = scope.branch === 'else' ? frame.elseBody ?? frame.thenBody : frame.thenBody;
-    return { position: clampInto(desiredPosition, size, body), scope };
+    return { position: clampInto(desiredPosition, size, frame.thenBody), scope };
   }
   return { position: pushOutOfFrames(desiredPosition, size, obstacles), scope: null };
 }
@@ -450,6 +412,14 @@ export function normalizeDrag(project: VisualProject, desired: Readonly<Record<s
   for (const id of Object.keys(desired)) {
     subtree.add(id);
     for (const d of descendants(project, id)) subtree.add(d);
+    const node = project.nodes.find(candidate => candidate.id === id);
+    if (node && isContainer(node)) {
+      const paired = node.kind === 'if' ? pairedElse(project, node.id) : pairedIf(project, node.id);
+      if (paired) {
+        subtree.add(paired.id);
+        for (const d of descendants(project, paired.id)) subtree.add(d);
+      }
+    }
   }
   for (const [id, wanted] of Object.entries(desired)) {
     const node = project.nodes.find(n => n.id === id);
@@ -469,6 +439,18 @@ export function normalizeDrag(project: VisualProject, desired: Readonly<Record<s
       if (changes[childId] !== undefined) continue;
       const before = project.positions[childId] ?? { x: 0, y: 0 };
       changes[childId] = { x: before.x + delta.x, y: before.y + delta.y };
+    }
+    if (changed && isContainer(node)) {
+      const paired = node.kind === 'if' ? pairedElse(project, node.id) : pairedIf(project, node.id);
+      if (paired && desired[paired.id] === undefined) {
+        const pairedBefore = project.positions[paired.id] ?? { x: 0, y: 0 };
+        changes[paired.id] = { x: pairedBefore.x + delta.x, y: pairedBefore.y + delta.y };
+        for (const childId of descendants(project, paired.id)) {
+          if (changes[childId] !== undefined) continue;
+          const before = project.positions[childId] ?? { x: 0, y: 0 };
+          changes[childId] = { x: before.x + delta.x, y: before.y + delta.y };
+        }
+      }
     }
   }
   return { changes, scopes };

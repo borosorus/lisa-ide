@@ -108,7 +108,7 @@ export interface ContractResource {
   readonly functions: readonly ContractFunction[];
 }
 
-export type PortKind = 'value' | 'address' | 'bool' | 'condition';
+export type PortKind = 'value' | 'address' | 'bool' | 'condition' | 'control';
 
 export const CONTEXT_NAMES = ['SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE'] as const;
 export type ContextName = (typeof CONTEXT_NAMES)[number];
@@ -138,17 +138,15 @@ export type IfBranch = 'then' | 'else';
 /** Semantic scope of a node nested in an IF: its owning block and branch. */
 export interface ScopeTarget {
   readonly parent: string;
+  /** @deprecated Legacy branch data is migrated to an ELSE container on load. */
   readonly branch: IfBranch;
 }
 
 interface NodeBase {
   readonly id: string;
-  /** Id of the IfNode whose body contains this node; absent at top level. */
+  /** Id of the IF or ELSE container whose body contains this node. */
   readonly parent?: string;
-  /**
-   * Which branch of `parent` holds this node. Present exactly when `parent`
-   * is; children saved before ELSE existed are migrated to 'then'.
-   */
+  /** @deprecated Legacy persisted branch marker; converted to container ownership on load. */
   readonly branch?: IfBranch;
 }
 
@@ -162,7 +160,8 @@ export type GraphNode =
   | (NodeBase & { readonly kind: 'send'; readonly failureMode?: CallFailureMode })
   | (NodeBase & { readonly kind: 'rawcall'; readonly calldata: string; readonly failureMode?: CallFailureMode })
   | (NodeBase & { readonly kind: 'guard' })
-  | (NodeBase & { readonly kind: 'if'; readonly hasElse?: boolean; /** Auto-created success gate owned by a call node. */ readonly autoSuccessFor?: string });
+  | (NodeBase & { readonly kind: 'if'; /** @deprecated Legacy embedded ELSE marker; converted on load. */ readonly hasElse?: boolean; /** Auto-created success gate owned by a call node. */ readonly autoSuccessFor?: string })
+  | (NodeBase & { readonly kind: 'else' });
 
 export interface GraphEndpoint {
   readonly node: string;
@@ -175,6 +174,8 @@ export type GraphNodeDraft = DistributiveOmit<GraphNode, 'id'>;
 
 export interface GraphEdge {
   readonly id: string;
+  /** Undefined for value edges; control edges connect an IF to its ELSE container. */
+  readonly kind?: 'control';
   readonly from: GraphEndpoint;
   readonly to: GraphEndpoint;
 }

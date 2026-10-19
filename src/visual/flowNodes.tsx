@@ -1,10 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Handle, Position, useUpdateNodeInternals, useViewport, type NodeProps } from '@xyflow/react';
 import { inputPorts, outputPorts, type PortSpec } from './ports';
-import type { Frame } from './containment';
-import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfBranch, type IfFrameSize, type LiteralType, type VisualProject } from './model';
+import { type Frame } from './containment';
+import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfFrameSize, type LiteralType, type VisualProject } from './model';
 import { isBytesHex } from '../compile/hex';
 import type { NodeErrors } from './validate';
+import { pairedIf } from './controlFlow';
 
 /**
  * Canvas rendering of semantic nodes: readable cards with row-aligned ports
@@ -17,10 +18,6 @@ export interface NodeEditApi {
   patch(nodeId: string, fields: Record<string, unknown>): void;
   /** Persist a user resize of an IF frame; presentation only. */
   resize?(nodeId: string, size: IfFrameSize): void;
-  /** Give an IF block an ELSE branch; semantic, via projectState. */
-  enableElse?(nodeId: string): void;
-  /** UI-only: mark a branch region as the spawn target. */
-  selectBranch?(nodeId: string, branch: 'then' | 'else'): void;
   /** Change failure behavior and scaffold/reuse its success branch. Returns an inline explanation when blocked. */
   setFailureMode?(nodeId: string, mode: 'revert' | 'continue'): string | undefined;
 }
@@ -36,8 +33,6 @@ export interface LisaNodeData extends Record<string, unknown> {
   errors?: NodeErrors;
   /** True for the currently selected node. */
   selected?: boolean;
-  /** UI-only spawn target when this IF's region was last clicked. */
-  selectedBranch?: IfBranch;
 }
 
 /** Props every inline control needs so canvas gestures don't intercept it. */
@@ -74,13 +69,15 @@ export function nodeLabel(node: GraphNode, project: VisualProject): string {
       return 'REVERT UNLESS';
     case 'if':
       return 'IF';
+    case 'else':
+      return 'ELSE';
   }
 }
 
 const OP_GLYPH: Record<BinaryOp, string> = { add: '+', sub: '−', mul: '×', div: '÷', lt: '<', gt: '>', eq: '=' };
 
 export function LisaNode({ id, data }: NodeProps) {
-  const { node, project, frame, errors, selected, selectedBranch } = data as unknown as LisaNodeData;
+  const { node, project, frame, errors, selected } = data as unknown as LisaNodeData;
   const edit = useContext(NodeEditContext);
   const [failureModeNote, setFailureModeNote] = useState<string | null>(null);
   const inputs = inputPorts(node, project);
@@ -98,7 +95,9 @@ export function LisaNode({ id, data }: NodeProps) {
   const call = node.kind === 'call' ? callHead(node, project) : null;
   const bad = (port: string) => errors?.ports.has(port) === true;
 
-  return <div className={`lisa-node lisa-node-${node.kind}${invalid ? ' node-invalid' : ''}${selected ? ' node-selected' : ''}`}
+  const container = node.kind === 'if' || node.kind === 'else';
+  const elseParent = node.kind === 'else' ? pairedIf(project, node.id) : undefined;
+  return <div className={`lisa-node lisa-node-${node.kind}${container ? ' lisa-node-container' : ''}${invalid ? ' node-invalid' : ''}${selected ? ' node-selected' : ''}`}
     title={`${nodeLabel(node, project)}${errorText ? ` — ${errorText}` : ''}`}>
     {call ? <>
       <div className="node-head"><span className="node-name" title={call.title}>{call.contract}</span></div>
@@ -196,51 +195,17 @@ export function LisaNode({ id, data }: NodeProps) {
           title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`} />
       </div>)}
     </div>}
-    {node.kind === 'if' && frame && <>
-      <IfBranchRegions frame={frame} hasElse={node.kind === 'if' && node.hasElse === true} selectedBranch={selectedBranch} edit={edit} />
-      <IfResizeGrip frame={frame} edit={edit} />
-    </>}
+    {node.kind === 'if' && <div className="node-row control if-control-row">
+      <span className="if-control-label">THEN</span>
+      <span className="if-control-spacer" />
+      <span className="if-control-label">ELSE</span>
+      <Handle type="source" id="else" position={Position.Right} className="port port-control" title="Connect to an ELSE node" />
+    </div>}
+    {node.kind === 'else' && <div className={`else-connection-status${elseParent ? ' is-connected' : ''}`}>
+      {elseParent ? `Connected to ${nodeLabel(elseParent, project)}` : 'Connect this ELSE to an IF to include it in the program'}
+    </div>}
+    {container && frame && <IfResizeGrip frame={frame} edit={edit} />}
     {selected && errors !== undefined && errors.messages.length > 0 && <div className="node-error-text" role="alert">{errors.messages[0]}</div>}
-  </div>;
-}
-
-/**
- * THEN/ELSE work areas of an IF frame. The regions are a projection of the
- * frame geometry and carry no drop handling — containment is computed from
- * the semantic model on drop. Only the small affordances are interactive:
- * the branch labels pick the click-spawn target, and "+ ELSE" performs the
- * one semantic action on offer.
- */
-function IfBranchRegions({ frame, hasElse, selectedBranch, edit }: {
-  frame: Frame; hasElse: boolean; selectedBranch?: IfBranch; edit: NodeEditApi | null;
-}) {
-  const stop = stopEvents();
-  const rel = (r: { x: number; y: number; width: number; height: number }) => ({
-    left: r.x - frame.rect.x, top: r.y - frame.rect.y, width: r.width, height: r.height,
-  });
-  const chip = (branch: IfBranch, r: { x: number; y: number }) => (
-    <button type="button"
-      className={`if-branch-chip nodrag${selectedBranch === branch ? ' branch-selected' : ''}`}
-      aria-label={`${branch === 'then' ? 'Then' : 'Else'} branch — click to spawn new nodes here`}
-      {...stop}
-      onClick={e => { (stop.onClick as (ev: React.MouseEvent) => void)(e); edit?.selectBranch?.(frame.id, branch); }}>
-      {branch === 'then' ? 'THEN' : 'ELSE'}
-    </button>
-  );
-  return <div className="if-regions">
-    <div className="if-region" style={rel(frame.thenBody)} />
-    <span className="if-chip-anchor" style={{ left: rel(frame.thenHeader).left + 8, top: rel(frame.thenHeader).top + 4 }}>{chip('then', frame.thenHeader)}</span>
-    {hasElse && frame.elseBody && <>
-      <div className="if-region if-region-else" style={rel(frame.elseBody)} />
-      <span className="if-chip-anchor" style={{ left: rel(frame.elseHeader ?? frame.elseBody).left + 8, top: rel(frame.elseHeader ?? frame.elseBody).top + 4 }}>{chip('else', frame.elseHeader ?? frame.elseBody)}</span>
-    </>}
-    {!hasElse && (
-      <button type="button" className="if-enable-else nodrag" title="Add an ELSE branch to this IF"
-        {...stop}
-        onClick={e => { (stop.onClick as (ev: React.MouseEvent) => void)(e); edit?.enableElse?.(frame.id); }}>
-        + ELSE
-      </button>
-    )}
   </div>;
 }
 
@@ -295,7 +260,7 @@ function IfResizeGrip({ frame, edit }: { frame: Frame; edit: NodeEditApi | null 
     else if (d.element) { d.element.style.width = `${d.width}px`; d.element.style.height = `${d.height}px`; }
   }
 
-  return <div ref={gripRef} className="if-resize nodrag" aria-label="Resize IF frame" title="Drag to resize this IF"
+  return <div ref={gripRef} className="if-resize nodrag" aria-label="Resize container" title="Drag to resize this container"
     {...stop}
     onPointerDown={onPointerDown} onPointerMove={onPointerMove}
     onPointerUp={event => finish(event, true)} onPointerCancel={() => finish(null, false)} />;
