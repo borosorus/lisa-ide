@@ -20,9 +20,9 @@ export interface Rect { readonly x: number; readonly y: number; readonly width: 
 export function nodeSize(node: GraphNode, project: VisualProject): Size {
   switch (node.kind) {
     case 'call': {
-      // Call cards grow with their ABI: every input and output is its own row.
+      // Call cards grow with their ABI; the failure selector is another row.
       const rows = inputPorts(node, project).length + outputPorts(node, project).length;
-      return { width: 250, height: Math.max(96, 84 + rows * 29) };
+      return { width: 250, height: Math.max(141, 129 + rows * 29) };
     }
     case 'if':
       return project.frameSizes?.[node.id] ?? IF_DEFAULT_SIZE;
@@ -33,11 +33,11 @@ export function nodeSize(node: GraphNode, project: VisualProject): Size {
       // One address row plus the row carrying the output handle.
       return { width: 200, height: 108 };
     case 'send':
-      // Two input rows (address, value) and no output.
-      return { width: 200, height: 137 };
+      // Two inputs, a failure selector, and an optional success output.
+      return { width: 200, height: 182 + (node.failureMode === 'continue' ? 29 : 0) };
     case 'rawcall':
-      // Two input rows plus the calldata field row.
-      return { width: 220, height: 166 };
+      // Two inputs, calldata, a failure selector, and optional success output.
+      return { width: 220, height: 211 + (node.failureMode === 'continue' ? 29 : 0) };
     default:
       // Context/literal/hash/guard: one row, which also hosts the output handle.
       return { width: 180, height: 79 };

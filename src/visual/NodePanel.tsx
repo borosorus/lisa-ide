@@ -66,6 +66,7 @@ export function NodeInspector({ node, project }: {
       return <Typography variant="body2" color="text.secondary">
         {contract?.name ?? 'unknown contract'} · {fn?.signature ?? node.signature}
         {' · follows the contract address automatically'}
+        {node.failureMode === 'continue' && ' · continues after failure; use the success output to branch'}
       </Typography>;
     })()}
     {node.kind === 'context' && <Typography variant="body2" color="text.secondary">Reads {node.name}.</Typography>}
@@ -79,10 +80,12 @@ export function NodeInspector({ node, project }: {
     </Typography>}
     {node.kind === 'send' && <Typography variant="body2" color="text.secondary">
       Sends value, in wei, from the account running this program to the address it receives. Both inputs are required.
+      {node.failureMode === 'continue' && ' A failed transfer continues and exposes its success flag.'}
     </Typography>}
     {node.kind === 'rawcall' && <Typography variant="body2" color="text.secondary">
       Calls the address it receives with exactly {node.calldata === '0x' ? 'no calldata' : node.calldata};
       an unwired value means nothing is sent with the call.
+      {node.failureMode === 'continue' && ' A failed call continues and exposes its success flag.'}
     </Typography>}
     {node.kind === 'guard' && <Typography variant="body2" color="text.secondary">
       Reverts the program when its condition is false, carrying no revert data.

@@ -2,7 +2,7 @@ import { SOURCE_STORAGE_KEY } from '../editor/sourceStorage';
 import {
   BINARY_OPS, clampFrameSize, CONTEXT_NAMES, canonicalWordType, isValidLiteral, outputHeadOffsets,
   emptyProject,
-  type BinaryOp, type ContextName, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type Vec2, type VisualProject,
+  type BinaryOp, type CallFailureMode, type ContextName, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type Vec2, type VisualProject,
 } from './model';
 import { canonicalInputType, isValidAddress } from './abi';
 import { isBytesHex } from '../compile/hex';
@@ -188,6 +188,9 @@ function parseNode(value: unknown): GraphNode | null {
   if (value.parent !== undefined && typeof value.parent !== 'string') return null;
   if (value.branch !== undefined && value.branch !== 'then' && value.branch !== 'else') return null;
   if (value.hasElse !== undefined && typeof value.hasElse !== 'boolean') return null;
+  if (value.autoSuccessFor !== undefined && typeof value.autoSuccessFor !== 'string') return null;
+  const failureMode = parseCallFailureMode(value.failureMode);
+  if (failureMode === null) return null;
   // Branch metadata exists exactly inside a block; a stray branch on a
   // top-level node is stripped rather than losing the node.
   const base = value.parent === undefined
@@ -199,7 +202,8 @@ function parseNode(value: unknown): GraphNode | null {
   switch (value.kind) {
     case 'call':
       if (typeof value.contractId !== 'string' || typeof value.signature !== 'string') return null;
-      return { ...base, kind: 'call', contractId: value.contractId, signature: value.signature };
+      return { ...base, kind: 'call', contractId: value.contractId, signature: value.signature,
+        ...(failureMode === undefined ? {} : { failureMode }) };
     case 'context':
       if (!CONTEXT_NAMES.includes(value.name as never)) return null;
       return { ...base, kind: 'context', name: value.name as ContextName };
@@ -218,17 +222,24 @@ function parseNode(value: unknown): GraphNode | null {
       if (typeof value.data !== 'string' || !isBytesHex(value.data)) return null;
       return { ...base, kind: 'keccak', data: value.data };
     case 'send':
-      return { ...base, kind: 'send' };
+      return { ...base, kind: 'send', ...(failureMode === undefined ? {} : { failureMode }) };
     case 'rawcall':
       if (typeof value.calldata !== 'string' || !isBytesHex(value.calldata)) return null;
-      return { ...base, kind: 'rawcall', calldata: value.calldata };
+      return { ...base, kind: 'rawcall', calldata: value.calldata,
+        ...(failureMode === undefined ? {} : { failureMode }) };
     case 'guard':
       return { ...base, kind: 'guard' };
     case 'if':
-      return { ...base, kind: 'if', ...(value.hasElse === true ? { hasElse: true } : {}) };
+      return { ...base, kind: 'if', ...(value.hasElse === true ? { hasElse: true } : {}),
+        ...(typeof value.autoSuccessFor === 'string' ? { autoSuccessFor: value.autoSuccessFor } : {}) };
     default:
       return null;
   }
+}
+
+function parseCallFailureMode(value: unknown): CallFailureMode | undefined | null {
+  if (value === undefined) return undefined;
+  return value === 'revert' || value === 'continue' ? value : null;
 }
 
 interface LegacyDecoder {

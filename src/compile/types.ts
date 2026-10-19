@@ -10,6 +10,8 @@ export interface CompileOutput {
   readonly byteSize: number;
   readonly instructionCount: number;
   readonly disassembly: readonly string[];
+  /** Advisory source diagnostics; absent for imported bytecode. */
+  readonly warnings?: readonly CompileDiagnostic[];
 }
 
 export type CompileRequest =

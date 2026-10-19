@@ -3,7 +3,7 @@ import {
   type ContractResource, type GraphEndpoint, type GraphNode, type IfBranch, type VisualProject,
 } from './model';
 import { findFunction } from './ports';
-import { stableOrder, validateProject, type GraphDiagnostic } from './validate';
+import { stableOrder, tryOutputGates, validateProject, type GraphDiagnostic } from './validate';
 
 /**
  * Deterministic lowering: graph -> readable LISA authoring source.
@@ -37,6 +37,8 @@ interface Context {
   feed: Map<string, GraphEndpoint>;
   /** Output indices consumed from each call, ascending and deduplicated. */
   usedOutputs: Map<string, number[]>;
+  usedSuccess: Set<string>;
+  tryGates: Map<string, string>;
   names: NamePool;
 }
 
@@ -49,6 +51,8 @@ export function generateVisualSource(project: VisualProject): string {
     byId: new Map(project.nodes.map(n => [n.id, n])),
     feed: new Map(project.edges.map(e => [`${e.to.node}:${e.to.port}`, e.from])),
     usedOutputs: collectUsedOutputs(project),
+    usedSuccess: new Set(project.edges.filter(e => e.from.port === 'success').map(e => e.from.node)),
+    tryGates: tryOutputGates(project),
     names: new NamePool(),
   };
 
@@ -106,6 +110,19 @@ function emitScope(
       if (depth === 0) push(lines, '');
       const condition = exprOf(ctx, id, 'condition');
       const thenBody: string[] = [];
+      for (const [callId, gateId] of ctx.tryGates) {
+        if (gateId !== id) continue;
+        const call = ctx.byId.get(callId);
+        if (call?.kind !== 'call') continue;
+        const fn = findFunction(ctx.project, call.contractId, call.signature);
+        const handle = ctx.names.get(callKey(call.id));
+        if (!fn || !handle) throw new GraphError([{ node: call.id, message: 'Try-call result was not emitted before its success branch' }]);
+        for (const index of ctx.usedOutputs.get(call.id) ?? []) {
+          const name = ctx.names.get(decodeKey(call.id, index));
+          if (!name) throw new GraphError([{ node: call.id, message: 'Try-call output has no name' }]);
+          thenBody.push(`${'  '.repeat(depth + 1)}const ${name} = ${handle}.${decoderCall(fn, index)};`);
+        }
+      }
       emitScope(ctx, order, id, 'then', thenBody, depth + 1);
       const elseBody: string[] = [];
       const hasElse = node.kind === 'if' && node.hasElse === true;
@@ -130,12 +147,14 @@ function emitScope(
       // A transfer is a call with empty calldata and a value — exactly what
       // `p.call(addr, rawCalldata("0x"), v)` means to the builder.
       if (depth === 0) push(lines, '');
-      lines.push(`${pad}p.call(${exprOf(ctx, node.id, 'address')}, rawCalldata("0x"), ${exprOf(ctx, node.id, 'value')});`);
+      const callText = `p.${node.failureMode === 'continue' ? 'tryCall' : 'call'}(${exprOf(ctx, node.id, 'address')}, rawCalldata("0x"), ${exprOf(ctx, node.id, 'value')})`;
+      emitBareCall(ctx, node.id, callText, lines, pad);
     } else if (node.kind === 'rawcall') {
       if (depth === 0) push(lines, '');
       const valueFeed = ctx.feed.get(`${node.id}:value`);
-      lines.push(`${pad}p.call(${exprOf(ctx, node.id, 'address')}, rawCalldata("${node.calldata.toLowerCase()}")`
-        + (valueFeed ? `, ${exprOfSource(ctx, valueFeed)}` : '') + ');');
+      const callText = `p.${node.failureMode === 'continue' ? 'tryCall' : 'call'}(${exprOf(ctx, node.id, 'address')}, rawCalldata("${node.calldata.toLowerCase()}")`
+        + (valueFeed ? `, ${exprOfSource(ctx, valueFeed)}` : '') + ')';
+      emitBareCall(ctx, node.id, callText, lines, pad);
     }
   }
 }
@@ -148,19 +167,27 @@ function emitCall(ctx: Context, node: CallNode, lines: string[], pad: string): v
   const args = fn.inputs.map((_, index) => exprOf(ctx, node.id, `arg:${index}`));
   const valueFeed = fn.mutability === 'payable' ? ctx.feed.get(`${node.id}:value`) : undefined;
   const encoded = `encodeCall("${node.signature}"${args.length ? `, [${args.join(', ')}]` : ''})`;
-  const callText = `p.${isReadFunction(fn) ? 'staticCall' : 'call'}(${target}, ${encoded}`
+  const method = isReadFunction(fn) ? 'staticCall' : 'call';
+  const callText = `p.${node.failureMode === 'continue' ? `try${method[0].toUpperCase()}${method.slice(1)}` : method}(${target}, ${encoded}`
     + (valueFeed ? `, ${exprOfSource(ctx, valueFeed)}` : '') + ')';
 
   // Decoding happens at the call site because return data goes stale after
   // the next call; only outputs an edge consumes get a decoded constant.
   const used = ctx.usedOutputs.get(node.id) ?? [];
+  if (node.failureMode === 'continue') {
+    for (const index of used) {
+      ctx.names.assign(`${identifier(fn.name)}_${identifier(node.id)}_out${index}`, decodeKey(node.id, index));
+    }
+    emitBareCall(ctx, node.id, callText, lines, pad, used.length > 0);
+    return;
+  }
   if (used.length === 0) {
     lines.push(`${pad}${callText};`);
   } else if (used.length === 1) {
     const name = ctx.names.assign(`${identifier(fn.name)}_${identifier(node.id)}`, decodeKey(node.id, used[0]));
     lines.push(`${pad}const ${name} = ${callText}.${decoderCall(fn, used[0])};`);
   } else {
-    const handle = ctx.names.assign(`r_${identifier(node.id)}`, `call:${node.id}`);
+    const handle = ctx.names.assign(`r_${identifier(node.id)}`, callKey(node.id));
     lines.push(`${pad}const ${handle} = ${callText};`);
     for (const index of used) {
       const name = ctx.names.assign(
@@ -169,6 +196,19 @@ function emitCall(ctx: Context, node: CallNode, lines: string[], pad: string): v
       lines.push(`${pad}const ${name} = ${handle}.${decoderCall(fn, index)};`);
     }
   }
+}
+
+function emitBareCall(ctx: Context, nodeId: string, callText: string, lines: string[], pad: string, forceHandle = false): void {
+  if (forceHandle || ctx.usedSuccess.has(nodeId)) {
+    const handle = ctx.names.assign(`r_${identifier(nodeId)}`, callKey(nodeId));
+    lines.push(`${pad}const ${handle} = ${callText};`);
+  } else {
+    lines.push(`${pad}${callText};`);
+  }
+}
+
+function callKey(nodeId: string): string {
+  return `call:${nodeId}`;
 }
 
 /** The word for output `index` sits at its head offset; word 0 gets its alias. */
@@ -209,6 +249,7 @@ function exprOfSource(ctx: Context, source: GraphEndpoint): string {
       return `(${lhs}).${node.op}(${rhs})`;
     }
     case 'call': {
+      if (source.port === 'success') return successOf(ctx, node.id);
       const index = /^out:(\d+)$/.exec(source.port)?.[1];
       const name = index === undefined ? undefined : ctx.names.get(decodeKey(node.id, Number(index)));
       if (!name) {
@@ -216,6 +257,9 @@ function exprOfSource(ctx: Context, source: GraphEndpoint): string {
       }
       return name;
     }
+    case 'rawcall':
+    case 'send':
+      return successOf(ctx, node.id);
     case 'balance':
       // Inlined per use: a balance reserves no slot, and repeating the read is
       // exactly what a bound constant does in source mode, byte for byte.
@@ -228,6 +272,12 @@ function exprOfSource(ctx: Context, source: GraphEndpoint): string {
     default:
       throw new GraphError([{ node: node.id, message: `Node "${node.id}" cannot produce a value` }]);
   }
+}
+
+function successOf(ctx: Context, nodeId: string): string {
+  const handle = ctx.names.get(callKey(nodeId));
+  if (!handle) throw new GraphError([{ node: nodeId, port: 'success', message: 'Try-call result was not emitted before its use' }]);
+  return `${handle}.success`;
 }
 
 function literalText(node: Extract<GraphNode, { kind: 'literal' }>): string {

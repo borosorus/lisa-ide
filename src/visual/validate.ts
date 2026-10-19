@@ -154,6 +154,78 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
   if (cycle.length > 0) {
     diagnostics.push({ node: cycle[0], message: `Value cycle detected through: ${cycle.join(' → ')}` });
   }
+  if (diagnostics.length === 0) diagnostics.push(...validateTryResults(project));
+  return diagnostics;
+}
+
+/** The IF whose successful arm owns each try-call's decoded ABI outputs. */
+export function tryOutputGates(project: VisualProject): Map<string, string> {
+  const byId = new Map(project.nodes.map(node => [node.id, node]));
+  const gates = new Map<string, string>();
+  for (const call of project.nodes) {
+    if (call.kind !== 'call' || call.failureMode !== 'continue') continue;
+    const outputEdges = project.edges.filter(edge => edge.from.node === call.id && /^out:\d+$/.test(edge.from.port));
+    if (outputEdges.length === 0) continue;
+    const candidates = project.edges
+      .filter(edge => edge.from.node === call.id && edge.from.port === 'success'
+        && edge.to.port === 'condition' && byId.get(edge.to.node)?.kind === 'if')
+      .map(edge => byId.get(edge.to.node)!)
+      .sort((a, b) => scopeChain(a, byId).length - scopeChain(b, byId).length);
+    const gate = candidates.find(candidate => outputEdges.every(edge => {
+      const target = byId.get(edge.to.node);
+      return target && scopeChain(target, byId).some(scope => scope.id === candidate.id && scope.branch === 'then');
+    }));
+    if (gate) gates.set(call.id, gate.id);
+  }
+  return gates;
+}
+
+function validateTryResults(project: VisualProject): GraphDiagnostic[] {
+  const diagnostics: GraphDiagnostic[] = [];
+  const gates = tryOutputGates(project);
+  const byId = new Map(project.nodes.map(node => [node.id, node]));
+  for (const call of project.nodes) {
+    if (call.kind !== 'call' || call.failureMode !== 'continue') continue;
+    const outputEdges = project.edges.filter(edge => edge.from.node === call.id && /^out:\d+$/.test(edge.from.port));
+    if (outputEdges.length > 0 && !gates.has(call.id)) {
+      for (const edge of outputEdges) {
+        diagnostics.push({ node: edge.to.node, port: edge.to.port,
+          message: 'Try-call return data must be used inside the THEN branch of an IF driven by this call’s success output' });
+      }
+    }
+  }
+  if (diagnostics.length > 0) return diagnostics;
+
+  const gatesByIf = new Map<string, string[]>();
+  for (const [callId, ifId] of gates) {
+    const calls = gatesByIf.get(ifId) ?? [];
+    calls.push(callId);
+    gatesByIf.set(ifId, calls);
+  }
+  const { order } = stableOrder(project);
+  // Walk the same scope and statement order used by source generation. Any
+  // outbound call replaces returndata; an IF preserves it past the join only
+  // when both paths leave the same call as the most recent one.
+  function visitScope(parent: string | undefined, branch: IfBranch | undefined, incoming: string | null): string | null {
+    let live = incoming;
+    for (const id of order) {
+      const node = byId.get(id)!;
+      if (node.parent !== parent || (parent !== undefined && (node.branch ?? 'then') !== branch)) continue;
+      if (node.kind === 'if') {
+        for (const callId of gatesByIf.get(node.id) ?? []) {
+          if (live !== callId) diagnostics.push({ node: node.id, port: 'condition',
+            message: `Return data from ${callId} was replaced before its success branch; move that IF before other calls` });
+        }
+        const thenLive = visitScope(node.id, 'then', live);
+        const elseLive = node.hasElse ? visitScope(node.id, 'else', live) : live;
+        live = thenLive === elseLive ? thenLive : null;
+      } else if (node.kind === 'call' || node.kind === 'rawcall' || node.kind === 'send') {
+        live = node.id;
+      }
+    }
+    return live;
+  }
+  visitScope(undefined, undefined, null);
   return diagnostics;
 }
 

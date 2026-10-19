@@ -60,9 +60,12 @@ export function outputPorts(node: GraphNode, project: VisualProject): PortSpec[]
   switch (node.kind) {
     case 'call': {
       const fn = findFunction(project, node.contractId, node.signature);
-      if (!fn) return [];
+      const success = node.failureMode === 'continue'
+        ? [{ name: 'success', kind: 'condition' as const, label: 'success' }]
+        : [];
+      if (!fn) return success;
       const offsets = outputHeadOffsets(fn.outputs);
-      return fn.outputs.map((type, index) => {
+      return [...success, ...fn.outputs.map((type, index) => {
         const wordType = canonicalWordType(type);
         const decodable = wordType !== null && offsets[index] !== null;
         return {
@@ -76,7 +79,7 @@ export function outputPorts(node: GraphNode, project: VisualProject): PortSpec[]
             reason: wordType === null ? `${type} returns are not decodable yet` : 'output position cannot be located',
           }),
         };
-      });
+      })];
     }
     case 'context':
       return [{ name: 'out', kind: node.name === 'SELF' || node.name === 'CALLER' ? 'address' : 'value', label: node.name }];
@@ -97,7 +100,9 @@ export function outputPorts(node: GraphNode, project: VisualProject): PortSpec[]
     // decodable shape, and a raw word would be an untyped read of nothing.
     case 'send':
     case 'rawcall':
-      return [];
+      return node.failureMode === 'continue'
+        ? [{ name: 'success', kind: 'condition', label: 'success' }]
+        : [];
     case 'guard':
       return [];
     case 'if':

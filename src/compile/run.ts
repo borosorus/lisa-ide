@@ -3,6 +3,7 @@ import { hashProgram } from './artifact';
 import { evaluateSource } from './evaluate';
 import { bytesFromHex, hexFromBytes } from './hex';
 import type { CompileOutput } from './types';
+import { tryCallResultWarnings } from './tryCallWarnings';
 
 function inspectBytes(bytes: Uint8Array): CompileOutput {
   const decoded = decode(bytes);
@@ -17,7 +18,7 @@ function inspectBytes(bytes: Uint8Array): CompileOutput {
 }
 
 export function compileSource(source: string): CompileOutput {
-  return inspectBytes(evaluateSource(source).compile().bytes);
+  return { ...inspectBytes(evaluateSource(source).compile().bytes), warnings: tryCallResultWarnings(source) };
 }
 
 export function inspectProgram(program: string): CompileOutput {

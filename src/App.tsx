@@ -23,7 +23,7 @@ import { ContractsPanel } from './visual/ContractsPanel';
 import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas, type CanvasApi } from './visual/VisualCanvas';
 import {
-  addContract, addNode, connectPort, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes,
+  addContract, addNode, connectPort, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes, setCallFailureMode,
   setNodeFrameSize, updateContract, updateNode,
 } from './visual/projectState';
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type ScopeTarget, type Vec2, type VisualProject } from './visual/model';
@@ -218,6 +218,40 @@ export default function App() {
     const id = createId(project.nodes.map(n => n.id), 'call');
     setFocusNodeId(id);
     editVisual(p => placeNode(p, { id, kind: 'call', contractId, signature }));
+  }
+
+  function changeCallFailureMode(callId: string, mode: 'revert' | 'continue'): string | undefined {
+    const call = project.nodes.find(node => node.id === callId);
+    if (!call || !['call', 'rawcall', 'send'].includes(call.kind)) return;
+    const scaffold = { id: createId(project.nodes.map(node => node.id), 'if'), position: { x: 0, y: 0 } };
+    if (mode === 'continue') {
+      const gate: GraphNode = { id: scaffold.id, kind: 'if' };
+      const size = nodeSize(gate, project);
+      const sourcePosition = project.positions[callId] ?? viewportCenter();
+      const sourceSize = nodeSize(call, project);
+      const anchor = { x: sourcePosition.x + sourceSize.width + 28 + size.width / 2, y: sourcePosition.y + size.height / 2 };
+      const placement = call.parent
+        ? spawnInsideIf({ project, frameId: call.parent, branch: call.branch ?? 'then', size, anchor })
+        : null;
+      scaffold.position = placement?.position ?? spawnNear(project, anchor, gate);
+    }
+    const transition = setCallFailureMode(project, callId, mode, mode === 'continue' ? scaffold : undefined);
+    if (transition.message) return transition.message;
+    if (transition.project !== project) editVisual(transition.project);
+    if (transition.successIfId) {
+      setSelectedId(transition.successIfId);
+      setSelectedBranch({ nodeId: transition.successIfId, branch: 'then' });
+      // A nested scaffold is created beside a call already in the viewport.
+      // Fitting only that child makes xyflow mis-center nested coordinates;
+      // keep the current view for nested calls and pan for top-level ones.
+      setFocusNodeId(call.parent ? null : transition.successIfId);
+    } else if (mode === 'revert') {
+      const removedGate = project.nodes.find(node => node.kind === 'if' && node.autoSuccessFor === callId);
+      if (removedGate && selectedId === removedGate.id) setSelectedId(null);
+      if (removedGate && selectedBranch?.nodeId === removedGate.id) setSelectedBranch(null);
+      setSelectedBranch(current => current?.nodeId === callId ? null : current);
+    }
+    return undefined;
   }
 
   /** Restore the deleted graph; any compiled output was already invalidated. */
@@ -431,6 +465,7 @@ export default function App() {
             onDeleteEdges={deleteEdges}
             onConnect={(from, to) => editVisual(p => connectPort(p, { from, to }))}
             onPatchNode={(id, fields) => editVisual(p => updateNode(p, id, fields))}
+            onSetFailureMode={changeCallFailureMode}
             onResizeIf={(id, size) => editVisual(p => setNodeFrameSize(p, id, size), true)}
             onEnableElse={id => editVisual(p => enableElse(p, id))}
             onSelectBranch={(nodeId, branch) => { setSelectedBranch({ nodeId, branch }); setSelectedId(nodeId); }}

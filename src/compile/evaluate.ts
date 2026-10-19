@@ -1,6 +1,6 @@
 import { parse } from 'acorn';
 import {
-  CALLER, GAS, SELF, SELFBALANCE, TIMESTAMP, CallResult, ProgramBuilder, Value,
+  CALLER, GAS, SELF, SELFBALANCE, TIMESTAMP, CallResult, ProgramBuilder, TryCallResult, Value,
   createProgram, encodeCall, rawCalldata, toValue,
 } from '@bosorus/lisa-evm';
 import { isBytesHex } from './hex';
@@ -18,7 +18,7 @@ export class SourceError extends Error {
 const helpers: Readonly<Record<string, unknown>> = Object.freeze({
   createProgram, encodeCall, rawCalldata, SELF, CALLER, GAS, TIMESTAMP, SELFBALANCE,
 });
-const builderMethods = new Set(['staticCall', 'call', 'if', 'balance', 'revertUnless', 'keccak']);
+const builderMethods = new Set(['staticCall', 'call', 'tryStaticCall', 'tryCall', 'if', 'balance', 'revertUnless', 'keccak']);
 const valueMethods = new Set(['add', 'sub', 'mul', 'div', 'lt', 'gt', 'eq']);
 const resultMethods = new Set(['word', 'uint256', 'bytes32', 'bool']);
 
@@ -62,6 +62,14 @@ export function evaluateSource(source: string): ProgramBuilder {
   function expression(node: AstNode, scope: Scope, depth: number, statement = false): unknown {
     tick(node, depth);
     switch (node.type) {
+      case 'MemberExpression': {
+        if (node.computed || node.optional || node.property.type !== 'Identifier') {
+          return error(node, 'Computed and optional property access are not supported');
+        }
+        const receiver = expression(node.object as AstNode, scope, depth + 1);
+        if (receiver instanceof TryCallResult && node.property.name === 'success') return receiver.success;
+        return error(node, 'Only TryCallResult.success may be read as a property');
+      }
       case 'Literal':
         if (typeof node.value === 'string' || typeof node.value === 'number' ||
             typeof node.value === 'bigint' || typeof node.value === 'boolean') return node.value;

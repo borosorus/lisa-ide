@@ -21,6 +21,8 @@ export interface NodeEditApi {
   enableElse?(nodeId: string): void;
   /** UI-only: mark a branch region as the spawn target. */
   selectBranch?(nodeId: string, branch: 'then' | 'else'): void;
+  /** Change failure behavior and scaffold/reuse its success branch. Returns an inline explanation when blocked. */
+  setFailureMode?(nodeId: string, mode: 'revert' | 'continue'): string | undefined;
 }
 
 export const NodeEditContext = createContext<NodeEditApi | null>(null);
@@ -80,6 +82,7 @@ const OP_GLYPH: Record<BinaryOp, string> = { add: '+', sub: '−', mul: '×', di
 export function LisaNode({ id, data }: NodeProps) {
   const { node, project, frame, errors, selected, selectedBranch } = data as unknown as LisaNodeData;
   const edit = useContext(NodeEditContext);
+  const [failureModeNote, setFailureModeNote] = useState<string | null>(null);
   const inputs = inputPorts(node, project);
   const outputs = outputPorts(node, project);
   const invalid = errors !== undefined && errors.messages.length > 0;
@@ -162,15 +165,37 @@ export function LisaNode({ id, data }: NodeProps) {
       <InlineField id={id} value={node.calldata} isValid={isBytesHex} commit={calldata => ({ calldata })}
         ariaLabel="Raw calldata" edit={edit} stop={stop} />
     </div>}
-    {node.kind === 'call' && outputs.map(port => <div className={`node-row right${bad(port.name) ? ' row-invalid' : ''}`} key={port.name}>
-      <span className={`port-label${port.connectable === false ? ' unsupported' : ''}`}
-        title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`}>
-        {port.connectable === false ? `✕ ${port.label}` : port.label}
-      </span>
-      <Handle type="source" id={port.name} position={Position.Right}
-        className={`port port-${port.kind}${port.connectable === false ? ' port-blocked' : ''}${bad(port.name) ? ' port-invalid' : ''}`}
-        title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`} />
-    </div>)}
+    {(node.kind === 'call' || node.kind === 'rawcall' || node.kind === 'send') && <div className="node-outcome">
+      <div className="node-outcome-head">
+        <span className="node-outcome-label">On failure</span>
+        <div className="node-outcome-options" role="group" aria-label="Call failure behavior">
+          {(['revert', 'continue'] as const).map(mode => <button key={mode} type="button"
+            className={`nodrag node-outcome-option is-${mode}${(node.failureMode ?? 'revert') === mode ? ' is-active' : ''}`}
+            aria-label={`${mode === 'revert' ? 'Revert' : 'Continue'} on failure`}
+            aria-pressed={(node.failureMode ?? 'revert') === mode}
+            title={mode === 'revert' ? 'Stop the program if this call fails' : 'Continue and expose a success output'}
+            {...stop}
+            onClick={e => {
+              e.stopPropagation();
+              const note = edit?.setFailureMode?.(id, mode);
+              if (edit?.setFailureMode) setFailureModeNote(note ?? null);
+              else edit?.patch(id, { failureMode: mode });
+            }}>
+            {mode === 'revert' ? 'Revert' : 'Continue'}
+          </button>)}
+        </div>
+      </div>
+      {failureModeNote && <div className="node-outcome-note" role="alert">{failureModeNote}</div>}
+      {outputs.map(port => <div className={`node-row right${bad(port.name) ? ' row-invalid' : ''}`} key={port.name}>
+        <span className={`port-label${port.connectable === false ? ' unsupported' : ''}`}
+          title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`}>
+          {port.connectable === false ? `✕ ${port.label}` : port.label}
+        </span>
+        <Handle type="source" id={port.name} position={Position.Right}
+          className={`port port-${port.kind}${port.connectable === false ? ' port-blocked' : ''}${bad(port.name) ? ' port-invalid' : ''}`}
+          title={port.connectable === false ? `${port.label}: ${port.reason}` : `${port.label} (${port.kind})`} />
+      </div>)}
+    </div>}
     {node.kind === 'if' && frame && <>
       <IfBranchRegions frame={frame} hasElse={node.kind === 'if' && node.hasElse === true} selectedBranch={selectedBranch} edit={edit} />
       <IfResizeGrip frame={frame} edit={edit} />

@@ -28,6 +28,41 @@ function edge(from: string, fromPort: string, to: string, toPort: string): Graph
 const messages = (p: VisualProject) => validateProject(p).map(d => d.message);
 
 describe('validateProject', () => {
+  it('requires continued return values to stay in the matching success branch', () => {
+    const nodes: GraphNode[] = [
+      { id: 'self', kind: 'context', name: 'SELF' },
+      { id: 'read', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', failureMode: 'continue' },
+      { id: 'if1', kind: 'if' },
+      { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if1' },
+    ];
+    const edges = [
+      edge('self', 'out', 'read', 'arg:0'),
+      edge('read', 'success', 'if1', 'condition'),
+      edge('read', 'out:0', 'dep', 'arg:0'),
+    ];
+    expect(validateProject(project({ nodes, edges }))).toEqual([]);
+    const outside = project({ nodes: nodes.map(n => n.id === 'dep' ? { ...n, parent: undefined } : n), edges });
+    expect(messages(outside).join()).toContain('Try-call return data must be used inside');
+  });
+
+  it('rejects a call that replaces return data before a try-call success branch', () => {
+    const p = project({
+      nodes: [
+        { id: 'self', kind: 'context', name: 'SELF' },
+        { id: 'read', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', failureMode: 'continue' },
+        { id: 'other', kind: 'call', contractId: 'c1', signature: 'stake()' },
+        { id: 'if1', kind: 'if' },
+        { id: 'dep', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if1' },
+      ],
+      edges: [
+        edge('self', 'out', 'read', 'arg:0'),
+        edge('read', 'success', 'if1', 'condition'),
+        edge('read', 'out:0', 'dep', 'arg:0'),
+      ],
+    });
+    expect(messages(p).join()).toContain('was replaced before its success branch');
+  });
+
   it('accepts a connected program', () => {
     const p = project({
       nodes: [

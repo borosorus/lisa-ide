@@ -10,6 +10,7 @@ export interface Vec2 {
 }
 
 export type Mutability = 'pure' | 'view' | 'nonpayable' | 'payable';
+export type CallFailureMode = 'revert' | 'continue';
 
 /** One ABI function, canonicalized: `name(type,type)` plus metadata. */
 export interface ContractFunction {
@@ -152,16 +153,16 @@ interface NodeBase {
 }
 
 export type GraphNode =
-  | (NodeBase & { readonly kind: 'call'; readonly contractId: string; readonly signature: string })
+  | (NodeBase & { readonly kind: 'call'; readonly contractId: string; readonly signature: string; readonly failureMode?: CallFailureMode })
   | (NodeBase & { readonly kind: 'context'; readonly name: ContextName })
   | (NodeBase & { readonly kind: 'literal'; readonly literalType: LiteralType; readonly literal: string })
   | (NodeBase & { readonly kind: 'binary'; readonly op: BinaryOp })
   | (NodeBase & { readonly kind: 'balance' })
   | (NodeBase & { readonly kind: 'keccak'; readonly data: string })
-  | (NodeBase & { readonly kind: 'send' })
-  | (NodeBase & { readonly kind: 'rawcall'; readonly calldata: string })
+  | (NodeBase & { readonly kind: 'send'; readonly failureMode?: CallFailureMode })
+  | (NodeBase & { readonly kind: 'rawcall'; readonly calldata: string; readonly failureMode?: CallFailureMode })
   | (NodeBase & { readonly kind: 'guard' })
-  | (NodeBase & { readonly kind: 'if'; readonly hasElse?: boolean });
+  | (NodeBase & { readonly kind: 'if'; readonly hasElse?: boolean; /** Auto-created success gate owned by a call node. */ readonly autoSuccessFor?: string });
 
 export interface GraphEndpoint {
   readonly node: string;

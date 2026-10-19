@@ -22,7 +22,7 @@ describe('restricted LISA source', () => {
     expect(artifact).toEqual({
       format: 'lisa-program', version: 1, isa: 'lisa-v1',
       program: output.program, programHash: output.programHash,
-      compiler: { name: 'lisa-tooling', version: '0.3.0' },
+      compiler: { name: 'lisa-tooling', version: '0.4.0' },
     });
     expect(parseArtifact(JSON.stringify(artifact))).toEqual(artifact);
   });
@@ -37,6 +37,29 @@ describe('restricted LISA source', () => {
     for (const example of SOURCE_EXAMPLES) {
       expect(() => compileSource(example.source), example.id).not.toThrow();
     }
+  });
+
+  it('warns when try-call data is decoded without a recognized success guard', () => {
+    const output = compileSource(`const p = createProgram();
+const result = p.tryCall(SELF, encodeCall("f()", []));
+const value = result.uint256();
+return p;`);
+    expect(output.warnings).toHaveLength(1);
+    expect(output.warnings?.[0]).toMatchObject({ line: 3, message: expect.stringContaining('without a recognized success guard') });
+  });
+
+  it.each([
+    `const p = createProgram();
+const result = p.tryCall(SELF, encodeCall("f()", []));
+p.if(result.success, () => { const value = result.uint256(); });
+return p;`,
+    `const p = createProgram();
+const result = p.tryStaticCall(SELF, encodeCall("f()", []));
+p.revertUnless(result.success);
+const value = result.uint256();
+return p;`,
+  ])('accepts recognized try-call success guard patterns without a warning', code => {
+    expect(compileSource(code).warnings).toEqual([]);
   });
 
   it('inspects already-compiled bytecode', () => {
@@ -132,6 +155,29 @@ return p;`;
 p.if(${cond}, () => {}, async () => {});
 return p;`;
     expect(() => evaluateSource(src)).toThrow(SourceError);
+  });
+});
+
+describe('try calls (0.4.0)', () => {
+  it('compiles both try methods and exposes the success condition', () => {
+    const src = `const p = createProgram();
+const read = p.tryStaticCall(SELF, encodeCall("balanceOf(address)", [SELF]));
+p.if(read.success, () => {
+  const balance = read.uint256();
+  p.tryCall(SELF, encodeCall("deposit(uint256)", [balance]));
+});
+return p;`;
+    const ops = mnemonics(compileSource(src));
+    expect(ops.filter(op => op === 'STATICCALL')).toHaveLength(1);
+    expect(ops.filter(op => op === 'CALL')).toHaveLength(1);
+    expect(ops).toContain('RDLOAD');
+  });
+
+  it('keeps arbitrary properties blocked', () => {
+    expect(() => evaluateSource('const p = createProgram(); const r = p.tryCall(SELF, rawCalldata("0x")); const leaked = r.constructor; return p;'))
+      .toThrowError(/Only TryCallResult\.success may be read as a property/);
+    expect(() => evaluateSource('const p = createProgram(); const r = p.call(SELF, rawCalldata("0x")); const invalid = r.success; return p;'))
+      .toThrowError(/Only TryCallResult\.success may be read as a property/);
   });
 });
 

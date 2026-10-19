@@ -30,6 +30,7 @@ export interface VisualCanvasProps {
   onConnect(from: { node: string; port: string }, to: { node: string; port: string }): void;
   /** Inline edit commit from a node card; semantics stay in the project layer. */
   onPatchNode(id: string, fields: Record<string, unknown>): void;
+  onSetFailureMode?(id: string, mode: 'revert' | 'continue'): string | undefined;
   /** Committed IF frame resize; presentation metadata only. */
   onResizeIf?(id: string, size: IfFrameSize): void;
   /** Enable the ELSE branch of an IF block; semantic, one-way in this pass. */
@@ -62,7 +63,7 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onResizeIf, onEnableElse, onSelectBranch, selectedBranch, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, diagnostics, focusNodeId, canvasApi,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onEnableElse, onSelectBranch, selectedBranch, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, diagnostics, focusNodeId, canvasApi,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -177,7 +178,8 @@ function Canvas({
     resize: onResizeIf,
     enableElse: onEnableElse,
     selectBranch: onSelectBranch,
-  }), [onPatchNode, onResizeIf, onEnableElse, onSelectBranch]);
+    setFailureMode: onSetFailureMode,
+  }), [onPatchNode, onResizeIf, onEnableElse, onSelectBranch, onSetFailureMode]);
 
   const nodesRef = useRef(project.nodes);
   nodesRef.current = project.nodes;

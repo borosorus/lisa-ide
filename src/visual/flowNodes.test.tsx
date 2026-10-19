@@ -63,6 +63,16 @@ describe('LisaNode inline editing', () => {
 });
 
 describe('LisaNode call outputs', () => {
+  it('switches a call to continue mode and shows its success port', () => {
+    const project = projectWith([{
+      signature: 'status()', name: 'status', inputs: [], outputs: ['uint256'], mutability: 'view',
+    }]);
+    const patch = renderNode({ id: 'call1', kind: 'call', contractId: 'c1', signature: 'status()', failureMode: 'continue' }, project);
+    expect(patch.container.querySelector('[data-handleid="success"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Revert on failure' }));
+    expect(patch).toHaveBeenCalledWith('call1', { failureMode: 'revert' });
+  });
+
   it('shows decodable and named outputs as ports', () => {
     const project = projectWith([{
       signature: 'balanceOf(address)', name: 'balanceOf', inputs: ['address'],
@@ -100,7 +110,7 @@ describe('LisaNode interaction states', () => {
   it('colors exactly the implicated port and row', () => {
     const { container } = renderNode(CALL, project, { errors: { messages: ['bad'], ports: new Set(['arg:0']) } });
     expect(container.querySelector('[data-handleid="arg\\:0"]')!.className).toContain('port-invalid');
-    expect(container.querySelector('.node-row')!.className).toContain('row-invalid');
+    expect(container.querySelector('[data-handleid="arg\\:0"]')!.parentElement!.className).toContain('row-invalid');
     expect(container.querySelector('[data-handleid="out\\:0"]')!.className).not.toContain('port-invalid');
   });
 

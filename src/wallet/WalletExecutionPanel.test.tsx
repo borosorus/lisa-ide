@@ -230,7 +230,7 @@ describe('WalletExecutionPanel', () => {
     fireEvent.click(execute());
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm and send' }));
     expect(await screen.findByText('Reverted')).toBeInTheDocument();
-    expect(screen.getByText(/not retried automatically/i)).toBeInTheDocument();
+    expect(screen.getByText(/Review the program and account state before trying again/i)).toBeInTheDocument();
     await waitFor(() => expect(f.sendTransaction).toHaveBeenCalledOnce());
   });
 

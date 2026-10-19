@@ -34,6 +34,13 @@ export function OutputPanel(props: {
       {diagnosticLabel(error)}
     </Alert>}
     {props.notice && <Alert severity="info" sx={{ mb: 2 }}>{props.notice}</Alert>}
+    {output?.warnings?.map((warning, index) => <Alert key={`${warning.line ?? 0}:${warning.column ?? 0}:${index}`}
+      severity="warning" sx={{ mb: 1, overflowWrap: 'anywhere' }}
+      action={warning.line && props.onErrorReveal
+        ? <Button size="small" color="inherit" onClick={() => props.onErrorReveal!(warning.line!)}>Go to line</Button>
+        : undefined}>
+      {diagnosticLabel(warning)}
+    </Alert>)}
     {busy && <Typography color="text.secondary">Processing program…</Typography>}
     {!busy && !output && !error && <Typography color="text.secondary">Compile source or import an artifact to inspect the program.</Typography>}
     {output && <>

@@ -88,7 +88,9 @@ describe('nodeSize estimation', () => {
     const big = nodeSize({ id: 'b', kind: 'call', contractId: 'c1', signature: 'multi(address,uint256,bool)' }, wide);
     expect(big.width).toBe(small.width);
     expect(big.height).toBeGreaterThan(small.height);
-    expect(big.height).toBe(84 + 5 * 29);
+    expect(big.height).toBe(129 + 5 * 29);
+    expect(nodeSize({ id: 'a', kind: 'call', contractId: 'c1', signature: 'f()', failureMode: 'continue' }, wide).height)
+      .toBeGreaterThan(small.height);
   });
 
   it('sizes an IF from its stored frame size', () => {
@@ -128,5 +130,8 @@ describe('spawnPositionInBounds', () => {
     expect(nodeSize({ id: 'b', kind: 'balance' }, emptyProject())).toEqual({ width: 200, height: 108 });
     expect(nodeSize({ id: 'g', kind: 'guard' }, emptyProject())).toEqual({ width: 180, height: 79 });
     expect(nodeSize({ id: 'h', kind: 'keccak', data: '0x00' }, emptyProject())).toEqual({ width: 180, height: 79 });
+    expect(nodeSize({ id: 's', kind: 'send' }, emptyProject()).height).toBe(182);
+    expect(nodeSize({ id: 's', kind: 'send', failureMode: 'continue' }, emptyProject()).height).toBe(211);
+    expect(nodeSize({ id: 'r', kind: 'rawcall', calldata: '0x', failureMode: 'continue' }, emptyProject()).height).toBe(240);
   });
 });

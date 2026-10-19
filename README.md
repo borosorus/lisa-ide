@@ -1,7 +1,7 @@
 # LISA IDE
 
 A small browser IDE for writing, compiling, and inspecting LISA programs. It uses the published
-[`@bosorus/lisa-evm`](https://www.npmjs.com/package/@bosorus/lisa-evm) package at version `0.3.0`.
+[`@bosorus/lisa-evm`](https://www.npmjs.com/package/@bosorus/lisa-evm) package at version `0.4.0`.
 The application is static and needs no backend. Wallet execution is optional and inert until a
 deployment is configured — see [Wallet execution](#wallet-execution-optional).
 
@@ -34,6 +34,12 @@ outputs carry the address port kind so they prefer address slots. An **IF** node
 on a condition; enabling **ELSE** adds a second branch region. Which branch a node belongs to is
 stored on the node (`parent` plus `branch`) and never inferred from what overlaps it on screen; an
 empty branch emits `() => {}`. Changing a contract address updates every node referencing it.
+
+Call, raw call, and send nodes can use **On failure → Continue**. They then expose a `success`
+condition output. ABI return values from a continued call must be used inside the THEN branch of an
+IF driven by that call's `success` output. The IDE decodes those values at the start of that branch
+and reports an error if another call has replaced the return data before the IF. Calls with the
+default **Revert program** setting keep their checked-call behavior.
 
 The graph is canonical; the canvas is a projection of it. Before compiling, the graph is validated at
 graph level (cycles, missing inputs, invalid port types, IF-scope escapes) with node-addressed
@@ -123,7 +129,7 @@ return p;
 
 Available names: `createProgram`, `encodeCall`, `rawCalldata`, `SELF`, `CALLER`,
 `GAS`, `TIMESTAMP`, and `SELFBALANCE`. The supported methods are `p.staticCall`,
-`p.call`, `p.if`, `p.balance`, `p.revertUnless`, `p.keccak`, return-data
+`p.call`, `p.tryStaticCall`, `p.tryCall`, `p.if`, `p.balance`, `p.revertUnless`, `p.keccak`, return-data
 `word`/`uint256`/`bytes32`/`bool`, and value `add`/`sub`/`mul`/`div`/`lt`/`gt`/`eq`.
 `p.balance(address)` reads the balance of the address you pass (SELFBALANCE stays
 the account's own); it reserves no slot and re-reads wherever the value is consumed.
@@ -133,7 +139,11 @@ nothing uses — is refused rather than quietly compiled away.
 emits, and a LISA revert carries no data. `p.keccak(data)` hashes constant data
 written as `0x` hex and costs one slot — a digest is a word, so pass it to a
 `uint256` argument or compare it, not to a `bytesN` argument, which must be a
-compile-time constant. Source supports `const` bindings,
+compile-time constant.
+`tryCall` and `tryStaticCall` continue on failure and return a result whose `.success`
+property is a condition value. Decode a result only in its success branch, before another call
+replaces its return data.
+Source supports `const` bindings,
 strings, numbers, bigints, booleans, arrays, calls, zero-argument block callbacks
 for `p.if`, and a final `return p;`. It does not support imports, type annotations,
 arbitrary JavaScript globals, loops, assignment, general property access, or
@@ -152,7 +162,7 @@ Press **Compile** or **Ctrl/⌘ + Enter**. Compiler errors retain their source p
   "isa": "lisa-v1",
   "program": "0x00",
   "programHash": "0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a",
-  "compiler": { "name": "lisa-tooling", "version": "0.3.0" }
+  "compiler": { "name": "lisa-tooling", "version": "0.4.0" }
 }
 ```
 

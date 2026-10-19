@@ -27,14 +27,14 @@ const syntaxTheme = HighlightStyle.define([
 
 const names = [
   'createProgram', 'encodeCall', 'rawCalldata', 'SELF', 'CALLER', 'GAS', 'TIMESTAMP', 'SELFBALANCE',
-  'staticCall', 'call', 'if', 'balance', 'revertUnless', 'keccak', 'uint256', 'bytes32', 'bool', 'word',
+  'staticCall', 'call', 'tryStaticCall', 'tryCall', 'success', 'if', 'balance', 'revertUnless', 'keccak', 'uint256', 'bytes32', 'bool', 'word',
   'add', 'sub', 'mul', 'div', 'lt', 'gt', 'eq',
 ];
 
 function lisaCompletions(context: CompletionContext) {
   const word = context.matchBefore(/[\w$]*/);
   if (!word || (!context.explicit && word.from === word.to)) return null;
-  return { from: word.from, options: names.map(label => ({ label, type: 'function' })) };
+  return { from: word.from, options: names.map(label => ({ label, type: label === 'success' ? 'property' : 'function' })) };
 }
 
 const setDiagnostic = StateEffect.define<CompileDiagnostic | null>();

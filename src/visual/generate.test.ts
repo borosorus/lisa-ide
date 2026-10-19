@@ -44,6 +44,47 @@ function starterLikeProject(): VisualProject {
 }
 
 describe('generateVisualSource', () => {
+  it('decodes continued call outputs only inside the success branch', () => {
+    const base = starterLikeProject();
+    const project: VisualProject = {
+      ...base,
+      nodes: base.nodes.filter(node => node.id !== 'cmp1').map(node => node.id === 'call1' ? { ...node, failureMode: 'continue' } : node),
+      edges: [
+        base.edges[0],
+        { id: 'success', from: { node: 'call1', port: 'success' }, to: { node: 'if1', port: 'condition' } },
+        base.edges[4],
+      ],
+    };
+    const source = generateVisualSource(project);
+    expect(source).toContain('const r_call1 = p.tryStaticCall(');
+    expect(source).toContain('p.if(r_call1.success, () => {\n  const balanceOf_call1_out0 = r_call1.uint256();');
+    expect(source).toContain('encodeCall("deposit(uint256)", [balanceOf_call1_out0])');
+    expect(() => compileSource(source)).not.toThrow();
+  });
+
+  it('emits raw and transfer try calls with reusable success values', () => {
+    const project: VisualProject = {
+      ...emptyProject(),
+      nodes: [
+        { id: 'target', kind: 'context', name: 'SELF' },
+        { id: 'value', kind: 'literal', literalType: 'uint', literal: '1' },
+        { id: 'raw', kind: 'rawcall', calldata: '0x1234', failureMode: 'continue' },
+        { id: 'if1', kind: 'if' },
+        { id: 'send', kind: 'send', failureMode: 'continue', parent: 'if1' },
+      ],
+      edges: [
+        { id: 'a', from: { node: 'target', port: 'out' }, to: { node: 'raw', port: 'address' } },
+        { id: 'b', from: { node: 'raw', port: 'success' }, to: { node: 'if1', port: 'condition' } },
+        { id: 'c', from: { node: 'target', port: 'out' }, to: { node: 'send', port: 'address' } },
+        { id: 'd', from: { node: 'value', port: 'out' }, to: { node: 'send', port: 'value' } },
+      ],
+    };
+    const source = generateVisualSource(project);
+    expect(source).toContain('const r_raw = p.tryCall(SELF, rawCalldata("0x1234"));');
+    expect(source).toContain('p.if(r_raw.success, () => {\n  p.tryCall(SELF, rawCalldata("0x"), 1n);');
+    expect(() => compileSource(source)).not.toThrow();
+  });
+
   it('renders the starter example shape', () => {
     const source = generateVisualSource(starterLikeProject());
     expect(source).toBe(`const p = createProgram();

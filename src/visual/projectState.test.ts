@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyProject, type VisualProject } from './model';
 import {
   addContract, addEdge, addNode, connectPort, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes,
-  setNodeFrameSize, setNodeParent, setNodePosition, setNodeScope, updateContract, updateNode,
+  setCallFailureMode, setNodeFrameSize, setNodeParent, setNodePosition, setNodeScope, updateContract, updateNode,
 } from './projectState';
 import { iframes } from './containment';
 
@@ -68,6 +68,66 @@ describe('contracts', () => {
 });
 
 describe('nodes', () => {
+  it('creates an ordered success IF when a call switches to Continue, then removes its empty scaffold on Revert', () => {
+    let p = projectWithCall();
+    const switched = setCallFailureMode(p, 'call1', 'continue', { id: 'if1', position: { x: 300, y: 20 } });
+    p = switched.project;
+    expect(switched.successIfId).toBe('if1');
+    expect(p.nodes.map(node => node.id)).toEqual(['call1', 'if1', 'lit1']);
+    expect(p.nodes.find(node => node.id === 'call1')).toMatchObject({ failureMode: 'continue' });
+    expect(p.nodes.find(node => node.id === 'if1')).toMatchObject({ kind: 'if', autoSuccessFor: 'call1' });
+    expect(p.edges.at(-1)).toMatchObject({ from: { node: 'call1', port: 'success' }, to: { node: 'if1', port: 'condition' } });
+    const reverted = setCallFailureMode(p, 'call1', 'revert');
+    expect(reverted.message).toBeUndefined();
+    expect(reverted.project.nodes.some(node => node.id === 'if1')).toBe(false);
+    expect(reverted.project.edges.some(edge => edge.from.node === 'call1' && edge.from.port === 'success')).toBe(false);
+    expect(reverted.project.nodes.find(node => node.id === 'call1')).toMatchObject({ failureMode: 'revert' });
+  });
+
+  it('reuses an already connected same-scope success IF without claiming ownership', () => {
+    let p = projectWithCall();
+    p = addNode(p, { id: 'if1', kind: 'if' }, { x: 300, y: 20 });
+    p = addEdge(p, { from: { node: 'call1', port: 'success' }, to: { node: 'if1', port: 'condition' } });
+    const reused = setCallFailureMode(p, 'call1', 'continue', { id: 'if2', position: { x: 600, y: 20 } });
+    expect(reused.successIfId).toBe('if1');
+    expect(reused.project.nodes.some(node => node.id === 'if2')).toBe(false);
+    const blocked = setCallFailureMode(p, 'call1', 'revert');
+    expect(blocked.project).toBe(p);
+    expect(blocked.message).toMatch(/Disconnect the success output/);
+  });
+
+  it('blocks reverting an owned success gate after a node is added inside it', () => {
+    let p = projectWithCall();
+    p = setCallFailureMode(p, 'call1', 'continue', { id: 'if1', position: { x: 300, y: 20 } }).project;
+    p = addNode(p, { id: 'body', kind: 'guard', parent: 'if1' }, { x: 320, y: 80 });
+    const blocked = setCallFailureMode(p, 'call1', 'revert');
+    expect(blocked.project).toBe(p);
+    expect(blocked.message).toMatch(/Empty this success branch/);
+  });
+
+  it('cleans up an empty owned gate when its call is deleted but preserves populated user work', () => {
+    let p = projectWithCall();
+    p = setCallFailureMode(p, 'call1', 'continue', { id: 'if1', position: { x: 300, y: 20 } }).project;
+    expect(removeNodes(p, ['call1']).nodes.some(node => node.id === 'if1')).toBe(false);
+
+    p = addNode(p, { id: 'body', kind: 'guard', parent: 'if1' }, { x: 320, y: 80 });
+    const afterDelete = removeNodes(p, ['call1']);
+    expect(afterDelete.nodes.find(node => node.id === 'if1')).toMatchObject({ kind: 'if' });
+    expect(afterDelete.nodes.find(node => node.id === 'if1')).not.toHaveProperty('autoSuccessFor');
+    expect(afterDelete.nodes.some(node => node.id === 'body')).toBe(true);
+  });
+
+  it('treats an owned IF that was disconnected by the user as a normal IF', () => {
+    let p = projectWithCall();
+    p = setCallFailureMode(p, 'call1', 'continue', { id: 'if1', position: { x: 300, y: 20 } }).project;
+    p = removeEdge(p, p.edges.find(edge => edge.from.node === 'call1' && edge.from.port === 'success')!.id);
+    const reverted = setCallFailureMode(p, 'call1', 'revert');
+    expect(reverted.message).toBeUndefined();
+    expect(reverted.project.nodes.find(node => node.id === 'if1')).toMatchObject({ kind: 'if' });
+    expect(reverted.project.nodes.find(node => node.id === 'if1')).not.toHaveProperty('autoSuccessFor');
+    expect(removeNodes(p, ['call1']).nodes.find(node => node.id === 'if1')).toMatchObject({ kind: 'if' });
+  });
+
   it('addNode stores position metadata separately from semantics', () => {
     const p = addNode(emptyProject(), { id: 'x', kind: 'if' }, { x: 5, y: 6 });
     expect(p.nodes).toEqual([{ id: 'x', kind: 'if' }]);

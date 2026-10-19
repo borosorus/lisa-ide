@@ -25,6 +25,22 @@ p.if(balance.gt(1000n), () => {
 return p;`,
   },
   {
+    id: 'try-call',
+    label: 'Try a call',
+    description: 'Continue when a call fails, then decode its return value only after success.',
+    source: `const p = createProgram();
+const TOKEN = "0x1111111111111111111111111111111111111111";
+const VAULT = "0x2222222222222222222222222222222222222222";
+
+const result = p.tryStaticCall(TOKEN, encodeCall("balanceOf(address)", [SELF]));
+p.if(result.success, () => {
+  const balance = result.uint256();
+  p.tryCall(VAULT, encodeCall("deposit(uint256)", [balance]));
+});
+
+return p;`,
+  },
+  {
     id: 'minimal',
     label: 'Minimal program',
     description: 'Compile the smallest successful LISA program.',
