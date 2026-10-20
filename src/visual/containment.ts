@@ -371,27 +371,61 @@ export function resolveNodeDrop(params: {
 }
 
 /**
- * Minimum deterministic translation clearing every obstacle frame
- * (iterated, so nested/overlapping frames cannot trap the node). Ties
- * resolve in fixed order: right, left, down, up.
+ * Minimum deterministic translation clearing every obstacle frame. Choose
+ * among all frame boundaries at once so adjacent containers cannot make a
+ * node bounce between their nearest edges. Ties resolve right, left, down,
+ * then up.
  */
 function pushOutOfFrames(from: Vec2, size: Size, obstacles: readonly Frame[]): Vec2 {
-  let position = { ...from };
-  for (let pass = 0; pass < 64; pass++) {
-    const rect: Rect = { x: position.x, y: position.y, width: size.width, height: size.height };
-    const hit = obstacles.find(f => intersects(rect, f.rect));
-    if (!hit) break;
-    const candidates: readonly (readonly [number, number])[] = [
-      [hit.rect.x + hit.rect.width + OUTSIDE_GAP - position.x, 0],
-      [hit.rect.x - OUTSIDE_GAP - (position.x + size.width), 0],
-      [0, hit.rect.y + hit.rect.height + OUTSIDE_GAP - position.y],
-      [0, hit.rect.y - OUTSIDE_GAP - (position.y + size.height)],
-    ];
-    const [dx, dy] = candidates.reduce((a, b) =>
-      Math.abs(b[0]) + Math.abs(b[1]) < Math.abs(a[0]) + Math.abs(a[1]) ? b : a);
-    position = { x: position.x + dx, y: position.y + dy };
+  if (obstacles.length === 0) return from;
+  const currentRect = { ...from, ...size };
+  if (obstacles.every(frame => !intersects(currentRect, frame.rect))) return from;
+  const candidates = obstacles.flatMap(frame => [
+    { x: frame.rect.x + frame.rect.width + OUTSIDE_GAP, y: from.y },
+    { x: frame.rect.x - OUTSIDE_GAP - size.width, y: from.y },
+    { x: from.x, y: frame.rect.y + frame.rect.height + OUTSIDE_GAP },
+    { x: from.x, y: frame.rect.y - OUTSIDE_GAP - size.height },
+  ]);
+  const bounds = obstacles.reduce((all, frame) => ({
+    left: Math.min(all.left, frame.rect.x),
+    right: Math.max(all.right, frame.rect.x + frame.rect.width),
+    top: Math.min(all.top, frame.rect.y),
+    bottom: Math.max(all.bottom, frame.rect.y + frame.rect.height),
+  }), {
+    left: Number.POSITIVE_INFINITY, right: Number.NEGATIVE_INFINITY,
+    top: Number.POSITIVE_INFINITY, bottom: Number.NEGATIVE_INFINITY,
+  });
+  candidates.push(
+    { x: bounds.right + OUTSIDE_GAP, y: from.y },
+    { x: bounds.left - OUTSIDE_GAP - size.width, y: from.y },
+    { x: from.x, y: bounds.bottom + OUTSIDE_GAP },
+    { x: from.x, y: bounds.top - OUTSIDE_GAP - size.height },
+  );
+  // A clear placement can require moving along both axes: for example, a
+  // node may need to pass right of one frame and below a neighboring frame.
+  // Combine every relevant frame boundary so those short corner exits are
+  // considered alongside the single-axis candidates above.
+  const xCandidates = new Set(candidates.map(position => position.x));
+  const yCandidates = new Set(candidates.map(position => position.y));
+  for (const x of xCandidates) {
+    for (const y of yCandidates) candidates.push({ x, y });
   }
-  return position;
+  const clear = candidates.filter(position => {
+    const rect = { ...position, ...size };
+    return obstacles.every(frame => !intersects(rect, frame.rect));
+  });
+  return clear.reduce((best, candidate) => {
+    const distance = Math.abs(candidate.x - from.x) + Math.abs(candidate.y - from.y);
+    const bestDistance = Math.abs(best.x - from.x) + Math.abs(best.y - from.y);
+    if (distance !== bestDistance) return distance < bestDistance ? candidate : best;
+    const directionRank = (position: Vec2) => {
+      if (position.x > from.x) return 0; // right
+      if (position.x < from.x) return 1; // left
+      if (position.y > from.y) return 2; // down
+      return 3; // up
+    };
+    return directionRank(candidate) < directionRank(best) ? candidate : best;
+  });
 }
 
 /**

@@ -142,7 +142,7 @@ describe('LisaNode interaction states', () => {
     const edit = { patch: vi.fn(), resize: vi.fn() };
     const frame = { id: 'if1', rect: { x: 0, y: 0, width: 420, height: 260 }, header: { x: 0, y: 0, width: 420, height: 64 }, thenHeader: { x: 0, y: 64, width: 420, height: 28 }, thenBody: { x: 16, y: 92, width: 388, height: 152 }, depth: 0 };
     const { container } = renderNode({ id: 'if1', kind: 'if' }, emptyProject(), { frame }, edit);
-    const grip = screen.getByLabelText('Resize IF frame');
+    const grip = screen.getByLabelText('Resize container');
     expect(container.contains(grip)).toBe(true);
     fireEvent.pointerDown(grip, { clientX: 420, clientY: 260, pointerId: 1 });
     fireEvent.pointerMove(grip, { clientX: 500, clientY: 320, pointerId: 1 });
@@ -157,7 +157,7 @@ describe('LisaNode interaction states', () => {
     const edit = { patch: vi.fn(), resize: vi.fn() };
     const frame = { id: 'if1', rect: { x: 0, y: 0, width: 420, height: 260 }, header: { x: 0, y: 0, width: 420, height: 64 }, thenHeader: { x: 0, y: 64, width: 420, height: 28 }, thenBody: { x: 16, y: 92, width: 388, height: 152 }, depth: 0 };
     renderNode({ id: 'if1', kind: 'if' }, emptyProject(), { frame }, edit);
-    const grip = screen.getByLabelText('Resize IF frame');
+    const grip = screen.getByLabelText('Resize container');
     fireEvent.pointerDown(grip, { clientX: 200, clientY: 200, pointerId: 1 });
     fireEvent.pointerMove(grip, { clientX: 600, clientY: 600, pointerId: 1 });
     fireEvent.pointerCancel(grip, { pointerId: 1 });
@@ -168,7 +168,7 @@ describe('LisaNode interaction states', () => {
     const edit = { patch: vi.fn(), resize: vi.fn() };
     const frame = { id: 'if1', rect: { x: 0, y: 0, width: 260, height: 150 }, header: { x: 0, y: 0, width: 260, height: 64 }, thenHeader: { x: 0, y: 64, width: 260, height: 28 }, thenBody: { x: 16, y: 92, width: 228, height: 42 }, depth: 0 };
     renderNode({ id: 'if1', kind: 'if' }, emptyProject(), { frame }, edit);
-    const grip = screen.getByLabelText('Resize IF frame');
+    const grip = screen.getByLabelText('Resize container');
     fireEvent.pointerDown(grip, { clientX: 100, clientY: 100, pointerId: 1 });
     fireEvent.pointerMove(grip, { clientX: -400, clientY: -400, pointerId: 1 });
     fireEvent.pointerUp(grip, { clientX: -400, clientY: -400, pointerId: 1 });

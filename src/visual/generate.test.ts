@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { STARTER_SOURCE } from '../editor/examples';
 import { compileSource } from '../compile/run';
 import { emptyProject, type ContractFunction, type GraphEdge, type GraphNode, type VisualProject } from './model';
 import { generateVisualSource } from './generate';
@@ -14,6 +13,19 @@ const VAULT_FNS: ContractFunction[] = [
   { signature: 'deposit(uint256)', name: 'deposit', inputs: ['uint256'], outputs: [], mutability: 'nonpayable' },
   { signature: 'stake()', name: 'stake', inputs: [], outputs: [], mutability: 'payable' },
 ];
+const DEPOSIT_REFERENCE_SOURCE = `const p = createProgram();
+
+const c_TOKEN = "${USDC}";
+
+const c_VAULT = "${VAULT}";
+
+const balanceOf_call1 = p.staticCall(c_TOKEN, encodeCall("balanceOf(address)", [SELF])).uint256();
+
+p.if((balanceOf_call1).gt(1000n), () => {
+  p.call(c_VAULT, encodeCall("deposit(uint256)", [balanceOf_call1]));
+});
+
+return p;`;
 
 function starterLikeProject(): VisualProject {
   const nodes: GraphNode[] = [
@@ -102,9 +114,9 @@ p.if((balanceOf_call1).gt(1000n), () => {
 return p;`);
   });
 
-  it('compiles the graph to the same bytes as the hand-written starter source', () => {
+  it('compiles the graph to the same bytes as its hand-written reference source', () => {
     const fromGraph = compileSource(generateVisualSource(starterLikeProject()));
-    const fromSource = compileSource(STARTER_SOURCE);
+    const fromSource = compileSource(DEPOSIT_REFERENCE_SOURCE);
     expect(fromGraph.program).toBe(fromSource.program);
     expect(fromGraph.programHash).toBe(fromSource.programHash);
   });
@@ -401,14 +413,15 @@ describe('presentation cannot reach lowering', () => {
 
 describe('ELSE generation', () => {
   function elseProject(withElse = true): VisualProject {
+    const elseId = 'else1';
     const nodes: GraphNode[] = [
       { id: 'self1', kind: 'context', name: 'SELF' },
-      { id: 'if1', kind: 'if', ...(withElse ? { hasElse: true } : {}) },
-      { id: 't1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1', branch: 'then' },
+      { id: 'if1', kind: 'if' },
+      { id: 't1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1' },
       { id: 'cmp1', kind: 'binary', op: 'gt' },
       { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '5' },
       ...(withElse
-        ? [{ id: 'e1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if1', branch: 'else' } as GraphNode]
+        ? [{ id: elseId, kind: 'else' } as GraphNode, { id: 'e1', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: elseId } as GraphNode]
         : []),
     ];
     const edges: GraphEdge[] = [
@@ -417,14 +430,17 @@ describe('ELSE generation', () => {
       { id: 'g3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
       { id: 'g4', from: { node: 'self1', port: 'out' }, to: { node: 't1', port: 'arg:0' } },
       ...(withElse
-        ? [{ id: 'g5', from: { node: 'self1', port: 'out' }, to: { node: 'e1', port: 'arg:0' } } as GraphEdge]
+        ? [
+          { id: 'pair', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: elseId, port: 'if' } } as GraphEdge,
+          { id: 'g5', from: { node: 'self1', port: 'out' }, to: { node: 'e1', port: 'arg:0' } } as GraphEdge,
+        ]
         : []),
     ];
     return {
       contracts: [{ id: 'c1', name: 'Token', address: USDC, functions: TOKEN_FNS }],
       nodes, edges,
-      positions: { self1: { x: 0, y: 0 }, if1: { x: 0, y: 100 }, t1: { x: 30, y: 160 }, e1: { x: 470, y: 160 }, cmp1: { x: 0, y: 40 }, lit1: { x: 220, y: 40 } },
-      frameSizes: { if1: { width: 800, height: 300 } },
+      positions: { self1: { x: 0, y: 0 }, if1: { x: 0, y: 100 }, t1: { x: 30, y: 220 }, e1: { x: 506, y: 220 }, else1: { x: 476, y: 100 }, cmp1: { x: 0, y: 40 }, lit1: { x: 220, y: 40 } },
+      frameSizes: { if1: { width: 420, height: 300 }, ...(withElse ? { else1: { width: 420, height: 300 } } : {}) },
     };
   }
 
@@ -456,7 +472,7 @@ describe('ELSE generation', () => {
       ...p,
       contracts: [...p.contracts, { id: 'c2', name: 'Vault', address: VAULT, functions: VAULT_FNS }],
       edges: [...p.edges, { id: 'x1', from: { node: id, port: 'out:0' }, to: { node: id === 't1' ? 't2' : 'e2', port: 'arg:0' } }],
-      nodes: [...p.nodes, { id: id === 't1' ? 't2' : 'e2', kind: 'call', contractId: 'c2', signature: 'deposit(uint256)', parent: 'if1', branch: id === 't1' ? 'then' : 'else' }],
+      nodes: [...p.nodes, { id: id === 't1' ? 't2' : 'e2', kind: 'call', contractId: 'c2', signature: 'deposit(uint256)', parent: id === 't1' ? 'if1' : 'else1' }],
     });
     const thenSrc = generateVisualSource(used('t1'));
     const split = thenSrc.search(/\}, \(\) => \{/);
@@ -474,7 +490,7 @@ describe('ELSE generation', () => {
     const base = elseProject();
     const p: VisualProject = {
       ...base,
-      nodes: base.nodes.filter(n => !(n.parent === 'if1' && n.branch === 'else')),
+      nodes: base.nodes.filter(n => n.id !== 'e1'),
       edges: base.edges.filter(e => e.from.node !== 'e1' && e.to.node !== 'e1'),
     };
     const src = generateVisualSource(p);
@@ -489,14 +505,16 @@ describe('ELSE generation', () => {
       ...base,
       nodes: [
         ...base.nodes,
-        { id: 'if2', kind: 'if', parent: 'if1', branch: 'else', hasElse: true },
-        { id: 'e2', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'if2', branch: 'else' },
+        { id: 'if2', kind: 'if', parent: 'else1' },
+        { id: 'else2', kind: 'else', parent: 'else1' },
+        { id: 'e2', kind: 'call', contractId: 'c1', signature: 'balanceOf(address)', parent: 'else2' },
         { id: 'lit2', kind: 'literal', literalType: 'address', literal: USDC },
       ],
       edges: [
         ...base.edges,
         { id: 'n1', from: { node: 'lit2', port: 'out' }, to: { node: 'e2', port: 'arg:0' } },
         { id: 'n2', from: { node: 'cmp1', port: 'out' }, to: { node: 'if2', port: 'condition' } },
+        { id: 'pair2', kind: 'control', from: { node: 'if2', port: 'else' }, to: { node: 'else2', port: 'if' } },
       ],
       positions: { ...base.positions, if2: { x: 470, y: 240 }, e2: { x: 850, y: 300 }, lit2: { x: 0, y: -80 } },
     };
@@ -621,14 +639,16 @@ return p;`).program);
         { id: 'gas1', kind: 'context', name: 'GAS' },
         { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
         { id: 'cmp1', kind: 'binary', op: 'gt' },
-        { id: 'if1', kind: 'if', hasElse: true },
-        { id: 'hash1', kind: 'keccak', data: '0x01', parent: 'if1', branch: 'then' },
-        { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if1', branch: 'then' },
-        { id: 'guard1', kind: 'guard', parent: 'if1', branch: 'else' },
+        { id: 'if1', kind: 'if' },
+        { id: 'else1', kind: 'else' },
+        { id: 'hash1', kind: 'keccak', data: '0x01', parent: 'if1' },
+        { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)', parent: 'if1' },
+        { id: 'guard1', kind: 'guard', parent: 'else1' },
       ], [
         { id: 'e1', from: { node: 'gas1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
         { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
         { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+        { id: 'pair', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: 'else1', port: 'if' } },
         { id: 'e4', from: { node: 'hash1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
         { id: 'e5', from: { node: 'cmp1', port: 'out' }, to: { node: 'guard1', port: 'condition' } },
       ]),
@@ -648,7 +668,7 @@ return p;`).program);
       { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
       { id: 'cmp1', kind: 'binary', op: 'gt' },
       { id: 'if1', kind: 'if' },
-      { id: 'hash1', kind: 'keccak', data: '0x01', parent: 'if1', branch: 'then' },
+      { id: 'hash1', kind: 'keccak', data: '0x01', parent: 'if1' },
       { id: 'call1', kind: 'call', contractId: 'c1', signature: 'deposit(uint256)' },
     ], [
       { id: 'e1', from: { node: 'gas1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
@@ -656,7 +676,7 @@ return p;`).program);
       { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
       { id: 'e4', from: { node: 'hash1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } },
     ]);
-    expect(() => generateVisualSource(project)).toThrow(/cannot be used outside that block/);
+    expect(() => generateVisualSource(project)).toThrow(/cannot be used outside that container/);
   });
 });
 
@@ -755,16 +775,18 @@ return p;`).program);
       { id: 'gas1', kind: 'context', name: 'GAS' },
       { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
       { id: 'cmp1', kind: 'binary', op: 'gt' },
-      { id: 'if1', kind: 'if', hasElse: true },
-      { id: 'send1', kind: 'send', parent: 'if1', branch: 'then' },
-      { id: 'addr1', kind: 'literal', literalType: 'address', literal: TARGET, parent: 'if1', branch: 'then' },
-      { id: 'lit2', kind: 'literal', literalType: 'uint', literal: '5', parent: 'if1', branch: 'then' },
-      { id: 'raw1', kind: 'rawcall', calldata: '0x', parent: 'if1', branch: 'else' },
+      { id: 'if1', kind: 'if' },
+      { id: 'else1', kind: 'else' },
+      { id: 'send1', kind: 'send', parent: 'if1' },
+      { id: 'addr1', kind: 'literal', literalType: 'address', literal: TARGET, parent: 'if1' },
+      { id: 'lit2', kind: 'literal', literalType: 'uint', literal: '5', parent: 'if1' },
+      { id: 'raw1', kind: 'rawcall', calldata: '0x', parent: 'else1' },
       { id: 'self1', kind: 'context', name: 'SELF' },
     ], [
       { id: 'e1', from: { node: 'gas1', port: 'out' }, to: { node: 'cmp1', port: 'lhs' } },
       { id: 'e2', from: { node: 'lit1', port: 'out' }, to: { node: 'cmp1', port: 'rhs' } },
       { id: 'e3', from: { node: 'cmp1', port: 'out' }, to: { node: 'if1', port: 'condition' } },
+      { id: 'pair', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: 'else1', port: 'if' } },
       { id: 'e4', from: { node: 'addr1', port: 'out' }, to: { node: 'send1', port: 'address' } },
       { id: 'e5', from: { node: 'lit2', port: 'out' }, to: { node: 'send1', port: 'value' } },
       { id: 'e6', from: { node: 'self1', port: 'out' }, to: { node: 'raw1', port: 'address' } },

@@ -71,16 +71,12 @@ vi.mock('./visual/VisualCanvas', () => ({
       onClick={() => props.onDeleteNodes(props.project.nodes.slice(0, 1).map((n: { id: string }) => n.id))}
     />
     <button
+      aria-label="simulate-select-else"
+      onClick={() => props.onSelectNode(props.project.nodes.find((n: { kind: string }) => n.kind === 'else')?.id ?? null)}
+    />
+    <button
       aria-label="simulate-resize-first-if"
       onClick={() => props.onResizeIf?.(props.project.nodes[0]?.id ?? '', { width: 700, height: 500 })}
-    />
-    <button
-      aria-label="simulate-enable-else-first"
-      onClick={() => props.onEnableElse?.(props.project.nodes.find((n: { kind: string }) => n.kind === 'if')?.id ?? '')}
-    />
-    <button
-      aria-label="simulate-select-else-branch"
-      onClick={() => props.onSelectBranch?.(props.project.nodes.find((n: { kind: string }) => n.kind === 'if')?.id ?? '', 'else')}
     />
   </>,
 }));
@@ -114,6 +110,11 @@ describe('App', () => {
   function openNodes() {
     const menu = screen.queryByRole('button', { name: /^Nodes\b/ });
     if (menu && menu.getAttribute('aria-expanded') !== 'true') fireEvent.click(menu);
+  }
+
+  function closeNodeMenu() {
+    const close = screen.queryByRole('button', { name: 'Close node menu' });
+    if (close) fireEvent.click(close);
   }
 
   /** Expand Output when a test begins before a compile/import action. */
@@ -293,7 +294,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
     expect(await screen.findByText(/20-byte hex/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.getByText('No contracts yet. Add one to place its functions on the canvas.')).toBeInTheDocument();
+    expect(screen.getByText('No contracts yet. Add one to use its ABI functions here.')).toBeInTheDocument();
   });
 
   it('starts contracts collapsed and reveals searchable functions on expand', async () => {
@@ -442,6 +443,7 @@ describe('App', () => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       expect(saved.visual.nodes).toEqual([{ id: 'ctx1', kind: 'context', name: 'SELF' }]);
     });
+    closeNodeMenu();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-select-first' }));
     fireEvent.change(screen.getByLabelText('Context value'), { target: { value: 'CALLER' } });
     await waitFor(() => {
@@ -456,6 +458,7 @@ describe('App', () => {
     await addContract();
     openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    closeNodeMenu();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
     await waitFor(() => expect((JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.edges)).toHaveLength(1));
@@ -475,6 +478,7 @@ describe('App', () => {
     await addContract();
     openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    closeNodeMenu();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-delete-first' }));
     await screen.findByText(/Removed 1 node/);
     // A later edit means a wholesale snapshot restore would discard it — so undo goes.
@@ -500,6 +504,7 @@ describe('App', () => {
     await addContract();
     openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    closeNodeMenu();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
     await waitFor(() => {
@@ -516,6 +521,7 @@ describe('App', () => {
     await addContract();
     openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Literal' }));
+    closeNodeMenu();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect' }));
     await waitFor(() => expect((JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.edges)).toHaveLength(1));
@@ -581,9 +587,9 @@ describe('App', () => {
     await expandContract('USDC');
     openNodes();
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
+    closeNodeMenu();
     fireEvent.click(screen.getByRole('button', { name: 'simulate-drop' }));
     fireEvent.click(screen.getByRole('button', { name: 'simulate-connect-ctx' }));
-    await expandContract('USDC');
     fireEvent.change(screen.getByLabelText('Address for USDC'), { target: { value: '0x2222222222222222222222222222222222222222' } });
     fireEvent.blur(screen.getByLabelText('Address for USDC'));
     await waitFor(() => {
@@ -685,43 +691,47 @@ describe('App', () => {
 });
 
 
-describe('visual ELSE flows', () => {
-  beforeEach(() => {
-    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
-      version: 1, mode: 'visual', codeSource: null,
-      visual: {
-        contracts: [{ id: 'c1', name: 'USDC', address: ADDRESS, functions: [{
-          signature: 'balanceOf(address)', name: 'balanceOf', inputs: ['address'], outputs: ['uint256'], mutability: 'view',
-        }] }],
-        nodes: [{ id: 'if1', kind: 'if' }],
-        edges: [],
-        positions: { if1: { x: 0, y: 0 } },
-        frameSizes: { if1: { width: 420, height: 260 } },
-      },
-    }));
-  });
-
-  it('the + ELSE action enables ELSE on the block and persists it', async () => {
+describe('visual IF and ELSE containers', () => {
+  it('adding an IF also creates its connected ELSE container', async () => {
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.click(screen.getByRole('button', { name: 'simulate-enable-else-first' }));
+    await waitFor(() => expect(localStorage.getItem(PROJECT_STORAGE_KEY)).not.toBeNull());
+    const before = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual;
+    const beforeIds = new Set(before.nodes.map((n: { id: string }) => n.id));
+    fireEvent.click(screen.getByRole('button', { name: /^Nodes\b/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'IF' }));
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
-      expect(saved.visual.nodes.find((n: { id: string }) => n.id === 'if1').hasElse).toBe(true);
+      const addedIf = saved.visual.nodes.find((n: { id: string; kind: string }) => n.kind === 'if' && !beforeIds.has(n.id));
+      expect(addedIf).toBeDefined();
+      const pair = saved.visual.edges.find((edge: { kind?: string; from: { node: string; port: string } }) =>
+        edge.kind === 'control' && edge.from.node === addedIf.id && edge.from.port === 'else');
+      expect(pair).toBeDefined();
+      expect(saved.visual.nodes.find((n: { id: string }) => n.id === pair?.to.node)).toMatchObject({ kind: 'else' });
     });
   });
 
-  it('click-to-add into the selected ELSE branch records parent and branch', async () => {
+  it('adds nodes to the selected ELSE container without legacy branch metadata', async () => {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 3, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [],
+        nodes: [{ id: 'if1', kind: 'if' }, { id: 'else1', kind: 'else' }],
+        edges: [{ id: 'pair', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: 'else1', port: 'if' } }],
+        positions: { if1: { x: 0, y: 0 }, else1: { x: 476, y: 0 } },
+        frameSizes: { if1: { width: 420, height: 260 }, else1: { width: 420, height: 260 } },
+      },
+    }));
     render(<App />);
     fireEvent.click(screen.getByRole('button', { name: 'Visual' }));
-    fireEvent.click(screen.getByRole('button', { name: 'simulate-enable-else-first' }));
-    fireEvent.click(screen.getByRole('button', { name: 'simulate-select-else-branch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'simulate-select-else' }));
     fireEvent.click(screen.getByRole('button', { name: /^Nodes\b/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Context' }));
     await waitFor(() => {
       const saved = JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}');
       const added = saved.visual.nodes.find((n: { kind: string }) => n.kind === 'context');
-      expect(added).toMatchObject({ parent: 'if1', branch: 'else' });
+      expect(added).toMatchObject({ parent: 'else1' });
+      expect(added).not.toHaveProperty('branch');
     });
   });
 });

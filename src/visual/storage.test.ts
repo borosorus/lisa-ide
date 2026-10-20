@@ -312,18 +312,18 @@ describe('saved IF frame sizes', () => {
 describe('ELSE persistence', () => {
   const stored = (visual: unknown) => JSON.stringify({ version: 1, mode: 'visual', codeSource: null, visual });
 
-  it('migrates legacy IF children to the THEN branch', () => {
+  it('migrates legacy IF children to the unmarked IF container', () => {
     const parsed = parseStoredProject(stored({
       contracts: [], nodes: [{ id: 'if1', kind: 'if' }, { id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1' }],
       edges: [], positions: {}, frameSizes: {},
     }));
     expect(parsed.visual.nodes.find(n => n.id === 'if1')).toEqual({ id: 'if1', kind: 'if' });
-    expect(parsed.visual.nodes.find(n => n.id === 'ctx1')!.branch).toBe('then');
+    expect(parsed.visual.nodes.find(n => n.id === 'ctx1')).toEqual({ id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1' });
     const resaved = parseStoredProject(JSON.stringify(parsed));
-    expect(resaved.visual.nodes.find(n => n.id === 'ctx1')!.branch).toBe('then');
+    expect(resaved.visual.nodes.find(n => n.id === 'ctx1')).toEqual({ id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1' });
   });
 
-  it('persists hasElse and explicit branch membership', () => {
+  it('migrates embedded ELSE membership into a separate paired container', () => {
     const parsed = parseStoredProject(stored({
       contracts: [],
       nodes: [
@@ -332,11 +332,14 @@ describe('ELSE persistence', () => {
       ],
       edges: [], positions: {}, frameSizes: {},
     }));
-    expect(parsed.visual.nodes.find(n => n.id === 'if1')).toEqual({ id: 'if1', kind: 'if', hasElse: true });
-    expect(parsed.visual.nodes.find(n => n.id === 'ctx1')).toMatchObject({ parent: 'if1', branch: 'else' });
+    const elseNode = parsed.visual.nodes.find(n => n.kind === 'else');
+    expect(elseNode).toMatchObject({ kind: 'else' });
+    expect(parsed.visual.nodes.find(n => n.id === 'if1')).toEqual({ id: 'if1', kind: 'if' });
+    expect(parsed.visual.nodes.find(n => n.id === 'ctx1')).toMatchObject({ parent: elseNode!.id });
+    expect(parsed.visual.edges).toContainEqual({ id: 'e1', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: elseNode!.id, port: 'if' } });
   });
 
-  it('repairs ELSE membership under a block without ELSE', () => {
+  it('treats legacy ELSE membership without an embedded ELSE as ordinary IF content', () => {
     const parsed = parseStoredProject(stored({
       contracts: [],
       nodes: [
@@ -345,7 +348,7 @@ describe('ELSE persistence', () => {
       ],
       edges: [], positions: {}, frameSizes: {},
     }));
-    expect(parsed.visual.nodes.find(n => n.id === 'ctx1')!.branch).toBe('then');
+    expect(parsed.visual.nodes.find(n => n.id === 'ctx1')).toEqual({ id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1' });
   });
 
   it('drops nodes with malformed branch or hasElse values', () => {
@@ -370,20 +373,23 @@ describe('ELSE persistence', () => {
     expect(node).not.toHaveProperty('parent');
   });
 
-  it('round-trips an ELSE project through storage', () => {
+  it('round-trips separate ELSE containers and their control edge through storage', () => {
     const storage = new FakeStorage();
     saveStoredProject({ version: 1, mode: 'visual', codeSource: null, visual: {
-      contracts: [], edges: [], positions: { if1: { x: 0, y: 0 }, ctx1: { x: 10, y: 60 } },
-      frameSizes: { if1: { width: 800, height: 260 } },
+      contracts: [], positions: { if1: { x: 0, y: 0 }, else1: { x: 476, y: 0 }, ctx1: { x: 500, y: 120 } },
+      frameSizes: { if1: { width: 420, height: 260 }, else1: { width: 420, height: 260 } },
       nodes: [
-        { id: 'if1', kind: 'if', hasElse: true },
-        { id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1', branch: 'else' },
+        { id: 'if1', kind: 'if' },
+        { id: 'else1', kind: 'else' },
+        { id: 'ctx1', kind: 'context', name: 'SELF', parent: 'else1' },
       ],
+      edges: [{ id: 'pair', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: 'else1', port: 'if' } }],
     } }, storage);
     const loaded = loadStoredProject(storage)!;
     expect(loaded.visual.nodes.find(n => n.id === 'ctx1')).toEqual({
-      id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1', branch: 'else',
+      id: 'ctx1', kind: 'context', name: 'SELF', parent: 'else1',
     });
+    expect(loaded.visual.edges).toEqual([{ id: 'pair', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: 'else1', port: 'if' } }]);
   });
 });
 

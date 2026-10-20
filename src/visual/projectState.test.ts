@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyProject, type VisualProject } from './model';
 import {
-  addContract, addEdge, addNode, connectPort, duplicateNode, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes,
+  addContract, addEdge, addNode, connectPort, duplicateNode, moveGraphNodes, removeContract, removeEdge, removeNodes,
   setCallFailureMode, setExecutionAfter, setNodeFrameSize, setNodeParent, setNodePosition, setNodeScope, updateContract, updateNode,
 } from './projectState';
 import { iframes } from './containment';
@@ -101,13 +101,15 @@ describe('nodes', () => {
     const switched = setCallFailureMode(p, 'call1', 'continue', { id: 'if1', position: { x: 300, y: 20 } });
     p = switched.project;
     expect(switched.successIfId).toBe('if1');
-    expect(p.nodes.map(node => node.id)).toEqual(['call1', 'if1', 'lit1']);
+    expect(p.nodes.map(node => node.id)).toEqual(['call1', 'if1', 'lit1', 'else1']);
     expect(p.nodes.find(node => node.id === 'call1')).toMatchObject({ failureMode: 'continue' });
     expect(p.nodes.find(node => node.id === 'if1')).toMatchObject({ kind: 'if', autoSuccessFor: 'call1' });
+    expect(p.edges.at(-2)).toMatchObject({ kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: 'else1', port: 'if' } });
     expect(p.edges.at(-1)).toMatchObject({ from: { node: 'call1', port: 'success' }, to: { node: 'if1', port: 'condition' } });
     const reverted = setCallFailureMode(p, 'call1', 'revert');
     expect(reverted.message).toBeUndefined();
     expect(reverted.project.nodes.some(node => node.id === 'if1')).toBe(false);
+    expect(reverted.project.nodes.some(node => node.id === 'else1')).toBe(false);
     expect(reverted.project.edges.some(edge => edge.from.node === 'call1' && edge.from.port === 'success')).toBe(false);
     expect(reverted.project.nodes.find(node => node.id === 'call1')).toMatchObject({ failureMode: 'revert' });
   });
@@ -158,7 +160,8 @@ describe('nodes', () => {
 
   it('addNode stores position metadata separately from semantics', () => {
     const p = addNode(emptyProject(), { id: 'x', kind: 'if' }, { x: 5, y: 6 });
-    expect(p.nodes).toEqual([{ id: 'x', kind: 'if' }]);
+    expect(p.nodes).toEqual([{ id: 'x', kind: 'if' }, { id: 'else1', kind: 'else' }]);
+    expect(p.edges).toEqual([{ id: 'e1', kind: 'control', from: { node: 'x', port: 'else' }, to: { node: 'else1', port: 'if' } }]);
     expect(p.positions.x).toEqual({ x: 5, y: 6 });
   });
 
@@ -174,7 +177,10 @@ describe('nodes', () => {
     p = addNode(p, { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' }, { x: 2, y: 2 });
     p = addEdge(p, { from: { node: 'lit1', port: 'out' }, to: { node: 'call1', port: 'arg:0' } });
     const after = removeNodes(p, ['if1']);
-    expect(after.nodes).toEqual([{ id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' }]);
+    expect(after.nodes).toEqual([
+      { id: 'else1', kind: 'else' },
+      { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '1' },
+    ]); // the paired ELSE becomes an available, inactive standalone container
     expect(after.edges).toEqual([]); // edge touched a cascaded node
     expect(after.positions.if1).toBeUndefined();
     expect(after.positions.call1).toBeUndefined();
@@ -198,10 +204,9 @@ describe('nodes', () => {
     p = addNode(p, { id: 'if1', kind: 'if' }, { x: 0, y: 0 });
     p = addNode(p, { id: 'lit1', kind: 'literal', literalType: 'uint', literal: '7' }, { x: 0, y: 0 });
     p = setNodeParent(p, 'lit1', 'if1');
-    expect(p.nodes.find(n => n.id === 'lit1')).toEqual({ id: 'lit1', kind: 'literal', literalType: 'uint', literal: '7', parent: 'if1', branch: 'then' });
+    expect(p.nodes.find(n => n.id === 'lit1')).toEqual({ id: 'lit1', kind: 'literal', literalType: 'uint', literal: '7', parent: 'if1' });
     p = setNodeParent(p, 'lit1', undefined);
     expect(p.nodes.find(n => n.id === 'lit1')).not.toHaveProperty('parent');
-    expect(p.nodes.find(n => n.id === 'lit1')).not.toHaveProperty('branch');
   });
 
   it('setNodeParent rejects invalid containment without touching the project', () => {
@@ -254,7 +259,8 @@ describe('IF frame sizes', () => {
     expect(p.frameSizes.if1).toEqual({ width: 260, height: 150 });
     expect(p.nodes).toEqual(before.nodes);
     expect(p.edges).toEqual(before.edges);
-    expect(p.positions).toEqual(before.positions);
+    // A resized frame can move an unscoped card clear of the new frame rect;
+    // the resize remains presentation-only because node and edge semantics stay fixed.
   });
 
   it('rejects sizes for non-IF nodes and non-finite numbers', () => {
@@ -268,10 +274,12 @@ describe('IF frame sizes', () => {
   it('shrinking below the content keeps the frame wrapping its children', () => {
     let p = addNode(emptyProject(), { ...IF }, { x: 0, y: 0 });
     p = addNode(p, { id: 'call1', kind: 'call', contractId: 'c1', signature: 'f()', parent: 'if1' }, { x: 900, y: 500 });
+    p = moveGraphNodes(p, { call1: { x: 900, y: 500 } });
     p = setNodeFrameSize(p, 'if1', { width: 260, height: 150 });
     const frame = iframes(p).get('if1')!;
     expect(p.frameSizes.if1.width).toBeGreaterThanOrEqual(900 + 250 + 16);
-    expect(frame.rect.height).toBeGreaterThanOrEqual(500 + 16);
+    const childPos = p.positions.call1;
+    expect(frame.rect.y + frame.rect.height).toBeGreaterThanOrEqual(childPos.y + 79 + 16);
   });
 
   it('moving a child outward grows the stored frame; moving back never shrinks it', () => {
@@ -299,7 +307,8 @@ describe('IF frame sizes', () => {
     p = addNode(p, { id: 'ctx1', kind: 'context', name: 'SELF' }, { x: 1000, y: 900 });
     p = moveGraphNodes(p, { ctx1: { x: 300, y: 200 } }, { ctx1: { parent: 'if1', branch: 'then' } });
     expect(p.nodes.find(n => n.id === 'ctx1')?.parent).toBe('if1');
-    expect(p.positions.ctx1).toEqual({ x: 300, y: 200 });
+    expect(p.positions.ctx1.x).toBeGreaterThanOrEqual(16);
+    expect(p.positions.ctx1.y).toBeGreaterThanOrEqual(96);
   });
 
   it('deleting an IF cascade-removes its stored frame size', () => {
@@ -310,38 +319,33 @@ describe('IF frame sizes', () => {
   });
 });
 
-describe('ELSE transitions', () => {
+describe('IF and ELSE containers', () => {
   const IF = { id: 'if1', kind: 'if' } as const;
   const CTX = { id: 'ctx1', kind: 'context', name: 'SELF' } as const;
 
-  it('enableElse marks the block and persists the wider frame', () => {
+  it('creating an IF creates and connects a sibling ELSE container', () => {
     let p = addNode(emptyProject(), IF, { x: 0, y: 0 });
     expect(p.frameSizes.if1.width).toBe(420);
-    p = enableElse(p, 'if1');
-    expect(p.nodes.find(n => n.id === 'if1')).toMatchObject({ kind: 'if', hasElse: true });
-    expect(p.frameSizes.if1.width).toBeGreaterThanOrEqual(640);
-    expect(enableElse(p, 'if1')).toBe(p);                       // idempotent
-    expect(enableElse(p, 'ghost')).toBe(p);                     // unknown node
-    const withLit = addNode(p, CTX, { x: 500, y: 500 });
-    expect(enableElse(withLit, 'ctx1')).toBe(withLit);          // non-IF
+    expect(p.nodes).toContainEqual({ id: 'else1', kind: 'else' });
+    expect(p.edges).toContainEqual({ id: 'e1', kind: 'control', from: { node: 'if1', port: 'else' }, to: { node: 'else1', port: 'if' } });
+    expect(p.frameSizes.else1).toEqual(p.frameSizes.if1);
   });
 
-  it('enableElse grows around children far to the right', () => {
+  it('grows an ELSE container around its own children independently', () => {
     let p = addNode(emptyProject(), IF, { x: 0, y: 0 });
-    p = addNode(p, { ...CTX, parent: 'if1', branch: 'then' }, { x: 1000, y: 60 });
-    p = enableElse(p, 'if1');
-    expect(p.frameSizes.if1.width).toBeGreaterThanOrEqual(1000 + 180 + 16 + 320);
+    p = addNode(p, { ...CTX, parent: 'else1' }, { x: 600, y: 120 });
+    p = moveGraphNodes(p, { ctx1: { x: 1000, y: 500 } });
+    expect(p.frameSizes.else1.width).toBeGreaterThanOrEqual(p.positions.ctx1.x + 180 + 16 - p.positions.else1.x);
+    expect(p.frameSizes.if1.width).toBe(420);
   });
 
-  it('setNodeScope rejects ELSE membership until ELSE exists', () => {
+  it('sets containment by parent container without storing branch metadata', () => {
     let p = addNode(emptyProject(), IF, { x: 0, y: 0 });
     p = addNode(p, CTX, { x: 50, y: 50 });
-    expect(setNodeScope(p, 'ctx1', { parent: 'if1', branch: 'else' })).toBe(p);
-    p = enableElse(p, 'if1');
-    const moved = setNodeScope(p, 'ctx1', { parent: 'if1', branch: 'else' });
-    expect(moved.nodes.find(n => n.id === 'ctx1')).toMatchObject({ parent: 'if1', branch: 'else' });
+    const moved = setNodeScope(p, 'ctx1', { parent: 'else1', branch: 'else' });
+    expect(moved.nodes.find(n => n.id === 'ctx1')).toEqual({ id: 'ctx1', kind: 'context', name: 'SELF', parent: 'else1' });
     const back = setNodeScope(moved, 'ctx1', { parent: 'if1', branch: 'then' });
-    expect(back.nodes.find(n => n.id === 'ctx1')).toMatchObject({ parent: 'if1', branch: 'then' });
+    expect(back.nodes.find(n => n.id === 'ctx1')).toEqual({ id: 'ctx1', kind: 'context', name: 'SELF', parent: 'if1' });
     const cleared = setNodeScope(back, 'ctx1', null);
     expect(cleared.nodes.find(n => n.id === 'ctx1')).not.toHaveProperty('branch');
     expect(setNodeScope(cleared, 'ctx1', null)).toBe(cleared);  // no-op is referential
@@ -352,22 +356,21 @@ describe('ELSE transitions', () => {
     p = addNode(p, { id: 'if2', kind: 'if', parent: 'if1' }, { x: 50, y: 50 });
     expect(setNodeScope(p, 'if1', { parent: 'if2', branch: 'then' })).toBe(p);
     expect(setNodeScope(p, 'if1', { parent: 'if1', branch: 'then' })).toBe(p);
-    p = enableElse(p, 'if1');
     const lit = addNode(p, CTX, { x: 400, y: 400 });
     expect(setNodeScope(lit, 'ctx1', { parent: 'ctx1', branch: 'then' })).toBe(lit);
   });
 
   it('moveGraphNodes records branch-only moves as one semantic edit', () => {
     let p = addNode(emptyProject(), IF, { x: 0, y: 0 });
-    p = enableElse(p, 'if1');
-    p = addNode(p, { ...CTX, parent: 'if1', branch: 'then' }, { x: 470, y: 100 });
+    p = addNode(p, { ...CTX, parent: 'if1' }, { x: 100, y: 100 });
     const before = p;
-    p = moveGraphNodes(p, { ctx1: { x: 900, y: 100 } }, { ctx1: { parent: 'if1', branch: 'else' } });
-    expect(p.nodes.find(n => n.id === 'ctx1')).toMatchObject({ parent: 'if1', branch: 'else' });
-    expect(p.positions.ctx1).toEqual({ x: 900, y: 100 });
+    p = moveGraphNodes(p, { ctx1: { x: 900, y: 100 } }, { ctx1: { parent: 'else1', branch: 'else' } });
+    expect(p.nodes.find(n => n.id === 'ctx1')).toMatchObject({ parent: 'else1' });
+    expect(p.nodes.find(n => n.id === 'ctx1')).not.toHaveProperty('branch');
+    expect(p.positions.ctx1.x).toBeGreaterThanOrEqual(476 + 16);
     // Positions alone stay a positional edit: scope untouched.
     const moved = moveGraphNodes(before, { ctx1: { x: 300, y: 100 } });
-    expect(moved.nodes.find(n => n.id === 'ctx1')).toMatchObject({ branch: 'then' });
+    expect(moved.nodes.find(n => n.id === 'ctx1')).toMatchObject({ parent: 'if1' });
   });
 
   it('updateNode cannot smuggle scope fields through field patches', () => {
