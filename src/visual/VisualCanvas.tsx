@@ -400,7 +400,7 @@ function Canvas({
         }}
       >
         <Background color={tokens.canvas.grid} gap={24} />
-        <Controls showInteractive={false} />
+        <Controls orientation="horizontal" showInteractive={false} />
         {selectedNodeId !== null && project.nodes.some(node => node.id === selectedNodeId) && (
           <Panel position="top-right" className="canvas-selection-actions">
             {project.nodes.some(node => node.id === selectedNodeId && isStatementNode(node)) &&
