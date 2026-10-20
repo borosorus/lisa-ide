@@ -67,8 +67,10 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 /* Canvas. */
 .canvas-host { flex: 1; min-height: 0; position: relative; background: var(--lisa-sunken); }
 .canvas-selection-actions { display: flex; gap: 6px; padding: 6px; border: 1px solid var(--lisa-border); border-radius: 10px; background: var(--lisa-paper); box-shadow: 0 3px 12px rgba(var(--lisa-text-rgb), 0.12); }
-.canvas-selection-actions .MuiButton-root { min-height: 32px; border-color: var(--lisa-border-strong); color: var(--lisa-text-secondary); font-size: 12px; font-weight: 600; text-transform: none; }
-.canvas-selection-actions .MuiButton-root:hover { border-color: var(--lisa-primary); background: var(--lisa-hover); color: var(--lisa-text); }
+.canvas-selection-actions .MuiButton-root { min-height: 32px; font-size: 12px; font-weight: 600; text-transform: none; }
+.canvas-selection-actions .MuiButton-outlined { border-color: var(--lisa-border-strong); color: var(--lisa-text-secondary); }
+.canvas-selection-actions .MuiButton-outlined:hover { border-color: var(--lisa-primary); background: var(--lisa-hover); color: var(--lisa-text); }
+.canvas-selection-actions .MuiButton-contained { color: var(--lisa-on-primary); }
 .canvas-host .react-flow__controls { border: 1px solid var(--lisa-border-strong); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 14px rgba(var(--lisa-text-rgb), 0.14); }
 .canvas-host .react-flow__controls-button { background: var(--lisa-paper); border-bottom: 1px solid var(--lisa-border); fill: var(--lisa-text-secondary); width: 26px; height: 26px; }
 .canvas-host .react-flow__controls-button:hover { background: var(--lisa-raised); color: var(--lisa-text); }
@@ -107,6 +109,16 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 .lisa-node-if { border-top: 3px solid var(--lisa-primary); border-radius: 12px; }
 .lisa-node-else { border-top: 3px solid var(--lisa-warning); border-radius: 12px; background: color-mix(in srgb, var(--lisa-warning) 5%, var(--lisa-paper)); }
 .node-head { display: flex; align-items: baseline; gap: 8px; min-height: 18px; }
+.execution-order-chip.MuiChip-root { max-width: 260px; border: 1px solid var(--lisa-border-strong); background: var(--lisa-raised); color: var(--lisa-text-secondary); font-size: 11px; }
+.execution-order-chip .MuiChip-label { overflow: hidden; text-overflow: ellipsis; }
+.execution-order-instruction { max-width: min(560px, calc(100vw - 40px)); padding: 8px 12px; border: 1px solid var(--lisa-border-strong); border-radius: 10px; background: var(--lisa-paper); box-shadow: 0 3px 12px rgba(var(--lisa-text-rgb), .12); }
+.execution-order-instruction .MuiButton-root { min-height: 28px; color: var(--lisa-primary); font-size: 12px; font-weight: 700; text-transform: none; }
+.react-flow__node.execution-order-source .lisa-node { outline: 2px solid var(--lisa-secondary); outline-offset: 3px; }
+.react-flow__node.execution-order-candidate .lisa-node { outline: 2px dashed var(--lisa-secondary); outline-offset: 3px; cursor: pointer; }
+.react-flow__node.execution-order-blocked .lisa-node { opacity: .62; cursor: not-allowed; }
+.react-flow .execution-order-handle { width: 2px; height: 2px; border: 0; border-radius: 50%; background: transparent; opacity: 0; pointer-events: none; }
+.react-flow__edge.execution-order-edge { pointer-events: none; }
+.react-flow__edge.execution-order-edge .react-flow__edge-path { stroke: var(--lisa-secondary); stroke-width: 2.75; opacity: .96; }
 .node-kind { color: var(--lisa-text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; flex: none; }
 .node-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-func { font-size: 11px; color: var(--lisa-text-secondary); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

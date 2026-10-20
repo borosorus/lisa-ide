@@ -1,21 +1,25 @@
-import { useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Background, Controls, Panel, ReactFlow, ReactFlowProvider, useReactFlow,
-  type Connection, type Edge, type Node,
+  MarkerType, type Connection, type Edge, type Node,
 } from '@xyflow/react';
-import { Button, Tooltip } from '@mui/material';
+import { Button, Stack, Tooltip, Typography } from '@mui/material';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import '@xyflow/react/dist/style.css';
-import { LisaNode, NodeEditContext, portsForNode, type NodeEditApi } from './flowNodes';
+import { LisaNode, NodeEditContext, nodeLabel, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
 import { absolutePosition, iframes, normalizeDrag } from './containment';
 import { indexDiagnostics, type GraphDiagnostic } from './validate';
 import { tokens } from '../theme/tokens';
 import type { GraphNode, IfFrameSize, ScopeTarget, Vec2, VisualProject } from './model';
-import { canPairElse, isContainer } from './controlFlow';
+import { activeNodeIds, canPairElse, isContainer } from './controlFlow';
+import { isStatementNode } from './model';
+import { executionAfterIssue } from './executionOrder';
+import { ExecutionOrderControl } from './ExecutionOrderControl';
 import { FUNCTION_MIME } from './ContractsPanel';
 
 const nodeTypes = { lisa: LisaNode };
+const isExecutionOrderEdge = (edge: Pick<Edge, 'data'>) => edge.data?.lisaExecutionOrder === true;
 
 /** Lets the sidebar place click-added nodes in the visible viewport. */
 export interface CanvasApi {
@@ -39,6 +43,7 @@ export interface VisualCanvasProps {
   onSelectNode(id: string | null): void;
   onSelectEdge(id: string | null): void;
   onDuplicateSelected(): void;
+  onSetExecutionAfter(id: string, predecessorId: string | null): void;
   selectedNodeId: string | null;
   selectedEdgeId: string | null;
   /** validateProject() findings; rendered on the nodes they belong to. */
@@ -63,10 +68,12 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, onDuplicateSelected, diagnostics, focusNodeId, focusRequest, canvasApi,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, onDuplicateSelected, onSetExecutionAfter, diagnostics, focusNodeId, focusRequest, canvasApi,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView } = useReactFlow();
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const [orderingSourceId, setOrderingSourceId] = useState<string | null>(null);
+  const [orderingMessage, setOrderingMessage] = useState<string | null>(null);
 
   const ownApiRef = useRef<CanvasApi | null>(null);
   const apiRef = canvasApi ?? ownApiRef;
@@ -93,8 +100,20 @@ function Canvas({
    */
   const deleteRef = useRef({ selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges });
   deleteRef.current = { selectedNodeId, selectedEdgeId, onDeleteNodes, onDeleteEdges };
+  const orderingSourceRef = useRef(orderingSourceId);
+  orderingSourceRef.current = orderingSourceId;
+  const cancelOrderingRef = useRef<() => void>(() => undefined);
+  cancelOrderingRef.current = () => {
+    setOrderingSourceId(null);
+    setOrderingMessage(null);
+  };
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && orderingSourceRef.current !== null) {
+        event.preventDefault();
+        cancelOrderingRef.current();
+        return;
+      }
       if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       const target = event.target as HTMLElement | null;
       if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
@@ -115,6 +134,21 @@ function Canvas({
 
   const frames = useMemo(() => iframes(project), [project]);
   const errorsByNode = useMemo(() => indexDiagnostics(diagnostics ?? []), [diagnostics]);
+  const active = useMemo(() => activeNodeIds(project), [project]);
+  const orderIssues = useMemo(() => {
+    if (orderingSourceId === null) return new Map<string, string>();
+    return new Map(project.nodes.map(node => [
+      node.id,
+      executionAfterIssue(project, node.id, orderingSourceId, active),
+    ] as const).filter((entry): entry is [string, string] => entry[1] !== null));
+  }, [project, orderingSourceId, active]);
+  useEffect(() => {
+    if (orderingSourceId !== null && (selectedNodeId !== orderingSourceId || !active.has(orderingSourceId)
+        || !project.nodes.some(node => node.id === orderingSourceId && isStatementNode(node)))) {
+      setOrderingSourceId(null);
+      setOrderingMessage(null);
+    }
+  }, [orderingSourceId, selectedNodeId, active, project.nodes]);
   const nodes = useMemo<Node[]>(() => {
     // xyflow resolves parentId against earlier entries, so ancestors must be
     // projected before their children; creation order stays otherwise.
@@ -135,10 +169,24 @@ function Canvas({
     return ordered.map(({ node }) => {
       const position = project.positions[node.id] ?? { x: 0, y: 0 };
       const frame = frames.get(node.id);
+      const choosingSuccessor = orderingSourceId !== null && node.id !== orderingSourceId;
+      const orderIssue = choosingSuccessor ? orderIssues.get(node.id) ?? null : null;
+      const orderClass = orderingSourceId === null ? undefined
+        : node.id === orderingSourceId ? 'execution-order-source'
+          : orderIssue === null ? 'execution-order-candidate' : 'execution-order-blocked';
+      const currentPredecessor = isStatementNode(node) ? node.executionAfter : undefined;
+      const orderHint = node.id === orderingSourceId
+        ? 'Choose a same-scope statement to run after this one.'
+        : choosingSuccessor
+          ? orderIssue ?? (currentPredecessor
+            ? `Click to run after the selected statement. This replaces its current order after ${currentPredecessor}.`
+            : 'Click to run after the selected statement.')
+          : undefined;
       const data = {
         node, project, frame,
         errors: errorsByNode.get(node.id),
         selected: node.id === selectedNodeId,
+        ...(orderingSourceId !== null ? { orderHint } : {}),
       };
       // Container frames live behind cards so they never swallow a drag that
       // starts on an overlapping node; children always outrank their frame.
@@ -147,6 +195,8 @@ function Canvas({
       if (!parentOk || node.parent === undefined) {
         return {
           id: node.id, type: 'lisa', position, zIndex, selected: node.id === selectedNodeId,
+          ...(orderClass ? { className: orderClass } : {}),
+          draggable: orderingSourceId === null,
           ...(frame ? { style: { width: frame.rect.width, height: frame.rect.height } } : {}),
           data,
         };
@@ -159,20 +209,55 @@ function Canvas({
         position: { x: position.x - parentAbs.x, y: position.y - parentAbs.y },
         zIndex,
         selected: node.id === selectedNodeId,
+        ...(orderClass ? { className: orderClass } : {}),
+        draggable: orderingSourceId === null,
         ...(frame ? { style: { width: frame.rect.width, height: frame.rect.height } } : {}),
         data,
       };
     });
-  }, [project, frames, errorsByNode, selectedNodeId]);
+  }, [project, frames, errorsByNode, selectedNodeId, orderingSourceId, orderIssues]);
 
-  const edges = useMemo<Edge[]>(() => project.edges.map(edge => ({
-    id: edge.id,
-    source: edge.from.node,
-    sourceHandle: edge.from.port,
-    target: edge.to.node,
-    targetHandle: edge.to.port,
-    ...(edge.kind === 'control' ? { type: 'smoothstep', className: 'if-else-edge' } : {}),
-  })), [project.edges]);
+  const edges = useMemo<Edge[]>(() => {
+    const graphEdges: Edge[] = project.edges.map(edge => ({
+      id: edge.id,
+      source: edge.from.node,
+      sourceHandle: edge.from.port,
+      target: edge.to.node,
+      targetHandle: edge.to.port,
+      ...(edge.kind === 'control' ? { type: 'smoothstep', className: 'if-else-edge' } : {}),
+    }));
+    const byId = new Map(project.nodes.map(node => [node.id, node] as const));
+    const usedEdgeIds = new Set(project.edges.map(edge => edge.id));
+    const orderingEdges: Edge[] = project.nodes.flatMap(target => {
+      if (!isStatementNode(target) || !target.executionAfter) return [];
+      const predecessor = byId.get(target.executionAfter);
+      if (!predecessor || !isStatementNode(predecessor) || !active.has(target.id) || !active.has(predecessor.id)) return [];
+      if (target.id !== selectedNodeId && predecessor.id !== selectedNodeId
+          && target.id !== orderingSourceId && predecessor.id !== orderingSourceId) return [];
+      const baseId = `__lisa_execution_order__${target.id}`;
+      let id = baseId;
+      let suffix = 1;
+      while (usedEdgeIds.has(id)) id = `${baseId}:${suffix++}`;
+      usedEdgeIds.add(id);
+      return [{
+        id,
+        data: { lisaExecutionOrder: true },
+        source: predecessor.id,
+        sourceHandle: 'execution-out',
+        target: target.id,
+        targetHandle: 'execution-in',
+        type: 'smoothstep',
+        className: 'execution-order-edge',
+        markerEnd: { type: MarkerType.ArrowClosed, color: tokens.accent.secondary },
+        selectable: false,
+        deletable: false,
+        reconnectable: false,
+        focusable: false,
+        interactionWidth: 0,
+      } as Edge];
+    });
+    return [...graphEdges, ...orderingEdges];
+  }, [project.edges, project.nodes, active, selectedNodeId, orderingSourceId]);
 
   const editApi = useMemo<NodeEditApi>(() => ({
     patch: onPatchNode,
@@ -263,12 +348,13 @@ function Canvas({
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        nodesConnectable={orderingSourceId === null}
         fitView
         deleteKeyCode={null}
         proOptions={{ hideAttribution: true }}
         onNodeDragStop={onNodeDragStop}
         onNodesDelete={deleted => onDeleteNodes(deleted.map(node => node.id))}
-        onEdgesDelete={deleted => onDeleteEdges(deleted.map(edge => edge.id))}
+        onEdgesDelete={deleted => onDeleteEdges(deleted.filter(edge => !isExecutionOrderEdge(edge)).map(edge => edge.id))}
         onConnect={c => {
           if (c.source && c.target) {
             onConnect(
@@ -278,14 +364,56 @@ function Canvas({
           }
         }}
         isValidConnection={isValidConnection}
-        onNodeClick={(_, node) => onSelectNode(node.id)}
-        onEdgeClick={(_, edge) => onSelectEdge(edge.id)}
-        onPaneClick={() => { onSelectNode(null); onSelectEdge(null); }}
+        onNodeClick={(_, node) => {
+          if (orderingSourceId !== null) {
+            if (node.id === orderingSourceId) {
+              cancelOrderingRef.current();
+              onSelectNode(orderingSourceId);
+              return;
+            }
+            const issue = orderIssues.get(node.id) ?? null;
+            if (issue) {
+              setOrderingMessage(issue);
+              return;
+            }
+            onSetExecutionAfter(node.id, orderingSourceId);
+            setOrderingSourceId(null);
+            setOrderingMessage(null);
+            onSelectNode(orderingSourceId);
+            onSelectEdge(null);
+            return;
+          }
+          onSelectNode(node.id);
+        }}
+        onEdgeClick={(_, edge) => {
+          if (isExecutionOrderEdge(edge)) return;
+          if (orderingSourceId !== null) {
+            setOrderingMessage('Choose a statement, or cancel ordering.');
+            return;
+          }
+          onSelectEdge(edge.id);
+        }}
+        onPaneClick={() => {
+          cancelOrderingRef.current();
+          onSelectNode(null);
+          onSelectEdge(null);
+        }}
       >
         <Background color={tokens.canvas.grid} gap={24} />
         <Controls showInteractive={false} />
         {selectedNodeId !== null && project.nodes.some(node => node.id === selectedNodeId) && (
           <Panel position="top-right" className="canvas-selection-actions">
+            {project.nodes.some(node => node.id === selectedNodeId && isStatementNode(node)) &&
+              <ExecutionOrderControl project={project} nodeId={selectedNodeId}
+                isOrdering={orderingSourceId === selectedNodeId}
+                onToggle={() => {
+                  if (orderingSourceId === selectedNodeId) cancelOrderingRef.current();
+                  else {
+                    setOrderingSourceId(selectedNodeId);
+                    setOrderingMessage(null);
+                  }
+                }}
+                onClear={() => onSetExecutionAfter(selectedNodeId, null)} />}
             <Tooltip title="Duplicate selected node or IF block">
               <Button
                 size="small"
@@ -301,6 +429,18 @@ function Canvas({
             </Tooltip>
           </Panel>
         )}
+        {orderingSourceId !== null && <Panel position="top-center" className="execution-order-instruction">
+          <Stack direction="row" alignItems="center" gap={1}>
+            <Typography variant="body2" role="status">
+              {orderingMessage ?? `Choose a statement to run after ${project.nodes.find(node => node.id === orderingSourceId)
+                ? `${nodeLabel(project.nodes.find(node => node.id === orderingSourceId)!, project)} (${orderingSourceId})` : 'this statement'}.`}
+            </Typography>
+            <Button size="small" onClick={event => {
+              event.stopPropagation();
+              cancelOrderingRef.current();
+            }}>Cancel</Button>
+          </Stack>
+        </Panel>}
         {project.nodes.length === 0 && (
           <Panel position="top-center">
             <div className="canvas-empty-hint">Drag a contract function here, or click one in the library.</div>

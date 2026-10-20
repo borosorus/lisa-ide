@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { emptyProject, type VisualProject } from './model';
 import {
-  addContract, addEdge, addNode, connectPort, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes,
-  setCallFailureMode, setNodeFrameSize, setNodeParent, setNodePosition, setNodeScope, updateContract, updateNode,
+  addContract, addEdge, addNode, connectPort, duplicateNode, enableElse, moveGraphNodes, removeContract, removeEdge, removeNodes,
+  setCallFailureMode, setExecutionAfter, setNodeFrameSize, setNodeParent, setNodePosition, setNodeScope, updateContract, updateNode,
 } from './projectState';
 import { iframes } from './containment';
 
@@ -64,6 +64,34 @@ describe('contracts', () => {
     expect(p.nodes.map(n => n.id)).toEqual(['lit1', 'call2']);
     expect(p.edges).toEqual([]); // the cross-contract edge was dangling
     expect(p.positions.call2).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe('execution order', () => {
+  it('sets and clears a predecessor, clears deleted references, and duplicates as Automatic', () => {
+    let p = emptyProject();
+    p = addNode(p, { id: 'before', kind: 'guard' }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'after', kind: 'guard' }, { x: 0, y: 0 });
+    p = setExecutionAfter(p, 'after', 'before');
+    expect(p.nodes.find(node => node.id === 'after')).toMatchObject({ executionAfter: 'before' });
+
+    const duplicate = duplicateNode(p, 'after', { x: 50, y: 0 });
+    expect(duplicate).not.toBeNull();
+    expect(duplicate!.project.nodes.find(node => node.id === duplicate!.nodeId)).not.toHaveProperty('executionAfter');
+
+    p = removeNodes(p, ['before']);
+    expect(p.nodes.find(node => node.id === 'after')).not.toHaveProperty('executionAfter');
+    expect(setExecutionAfter(p, 'after', 'missing')).toBe(p);
+    p = setExecutionAfter(p, 'after', 'after');
+    expect(p.nodes.find(node => node.id === 'after')).not.toHaveProperty('executionAfter');
+  });
+
+  it('rejects an explicit predecessor that cycles through data dependencies', () => {
+    let p = emptyProject();
+    p = addNode(p, { id: 'before', kind: 'guard' }, { x: 0, y: 0 });
+    p = addNode(p, { id: 'after', kind: 'guard' }, { x: 0, y: 0 });
+    p = addEdge(p, { from: { node: 'before', port: 'out' }, to: { node: 'after', port: 'condition' } });
+    expect(setExecutionAfter(p, 'before', 'after')).toBe(p);
   });
 });
 

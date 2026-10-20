@@ -19,7 +19,7 @@ export const PROJECT_STORAGE_KEY = 'lisa-ide.project.v1';
 export type AuthoringMode = 'code' | 'visual';
 
 export interface StoredProject {
-  readonly version: 1 | 2;
+  readonly version: 1 | 2 | 3;
   readonly mode: AuthoringMode;
   readonly codeSource: string | null;
   readonly visual: VisualProject;
@@ -54,7 +54,7 @@ export function loadStoredProject(
     raw = storage.getItem(PROJECT_STORAGE_KEY);
     if (raw === null) {
       const legacy = storage.getItem(SOURCE_STORAGE_KEY);
-      return legacy === null ? null : { version: 2, mode: 'code', codeSource: legacy, visual: emptyProject() };
+      return legacy === null ? null : { version: 3, mode: 'code', codeSource: legacy, visual: emptyProject() };
     }
   } catch {
     return null;
@@ -74,14 +74,14 @@ export function parseStoredProject(text: string): StoredProject {
     throw new Error('Saved project is not valid JSON');
   }
   if (!isRecord(candidate)) throw new Error('Saved project must be an object');
-  if (candidate.version !== 1 && candidate.version !== 2) throw new Error(`Unsupported saved project version: ${String(candidate.version)}`);
+  if (candidate.version !== 1 && candidate.version !== 2 && candidate.version !== 3) throw new Error(`Unsupported saved project version: ${String(candidate.version)}`);
   if (candidate.mode !== 'code' && candidate.mode !== 'visual') throw new Error('Saved project mode is invalid');
   if (candidate.codeSource !== null && typeof candidate.codeSource !== 'string') {
     throw new Error('Saved project codeSource must be a string or null');
   }
   const visual = parseVisual(candidate.visual, candidate.version);
   return {
-    version: 2,
+    version: 3,
     mode: candidate.mode,
     codeSource: candidate.codeSource as string | null,
     visual,
@@ -92,7 +92,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseVisual(value: unknown, version: 1 | 2): VisualProject {
+function parseVisual(value: unknown, version: 1 | 2 | 3): VisualProject {
   if (!isRecord(value)) throw new Error('Saved visual project must be an object');
   const contracts = parseItems(value.contracts, parseContract, 'contracts');
   if (!Array.isArray(value.nodes)) throw new Error('Saved nodes must be an array');
@@ -199,10 +199,14 @@ function parseNode(value: unknown): GraphNode | null {
         id: value.id, parent: value.parent as string,
         ...(value.branch === undefined ? {} : { branch: value.branch as IfBranch }),
       };
+  // Keep string references even when stale or out of scope so project
+  // validation can show an actionable diagnostic instead of silently losing it.
+  const statementBase = { ...base, ...(typeof value.executionAfter === 'string' && value.executionAfter.length > 0
+    ? { executionAfter: value.executionAfter } : {}) };
   switch (value.kind) {
     case 'call':
       if (typeof value.contractId !== 'string' || typeof value.signature !== 'string') return null;
-      return { ...base, kind: 'call', contractId: value.contractId, signature: value.signature,
+      return { ...statementBase, kind: 'call', contractId: value.contractId, signature: value.signature,
         ...(failureMode === undefined ? {} : { failureMode }) };
     case 'context':
       if (!CONTEXT_NAMES.includes(value.name as never)) return null;
@@ -220,17 +224,17 @@ function parseNode(value: unknown): GraphNode | null {
       return { ...base, kind: 'balance' };
     case 'keccak':
       if (typeof value.data !== 'string' || !isBytesHex(value.data)) return null;
-      return { ...base, kind: 'keccak', data: value.data };
+      return { ...statementBase, kind: 'keccak', data: value.data };
     case 'send':
-      return { ...base, kind: 'send', ...(failureMode === undefined ? {} : { failureMode }) };
+      return { ...statementBase, kind: 'send', ...(failureMode === undefined ? {} : { failureMode }) };
     case 'rawcall':
       if (typeof value.calldata !== 'string' || !isBytesHex(value.calldata)) return null;
-      return { ...base, kind: 'rawcall', calldata: value.calldata,
+      return { ...statementBase, kind: 'rawcall', calldata: value.calldata,
         ...(failureMode === undefined ? {} : { failureMode }) };
     case 'guard':
-      return { ...base, kind: 'guard' };
+      return { ...statementBase, kind: 'guard' };
     case 'if':
-      return { ...base, kind: 'if', ...(value.hasElse === true ? { hasElse: true } : {}),
+      return { ...statementBase, kind: 'if', ...(value.hasElse === true ? { hasElse: true } : {}),
         ...(typeof value.autoSuccessFor === 'string' ? { autoSuccessFor: value.autoSuccessFor } : {}) };
     case 'else':
       return { ...base, kind: 'else' };

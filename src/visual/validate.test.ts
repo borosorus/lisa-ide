@@ -184,7 +184,7 @@ describe('validateProject', () => {
       edges: [edge('x', 'out', 'y', 'lhs'), edge('y', 'out', 'x', 'rhs')],
     });
     const diags = messages(cyclic);
-    expect(diags.join()).toContain('Value cycle detected');
+    expect(diags.join()).toContain('Execution dependency cycle detected');
     const selfFeed = project({
       nodes: [{ id: 'x', kind: 'binary', op: 'add' }, { id: 'src', kind: 'context', name: 'GAS' }],
       edges: [
@@ -362,6 +362,32 @@ describe('stableOrder', () => {
     const { order, cycle } = stableOrder(p);
     expect(order).toEqual(['ok']);
     expect(cycle).toEqual(['x', 'y']);
+  });
+
+  it('respects explicit statement precedence while retaining automatic fallback order', () => {
+    const p = project({ nodes: [
+      { id: 'last', kind: 'guard', executionAfter: 'first' },
+      { id: 'free', kind: 'guard' },
+      { id: 'first', kind: 'guard' },
+    ] });
+    expect(stableOrder(p).order).toEqual(['free', 'first', 'last']);
+    expect(messages(p).filter(message => message.includes('Execution order'))).toEqual([]);
+  });
+
+  it('reports invalid explicit predecessor references and cycles', () => {
+    const missing = project({ nodes: [{ id: 'a', kind: 'guard', executionAfter: 'gone' }] });
+    expect(messages(missing).join()).toContain('Execution predecessor "gone" is missing');
+    const crossScope = project({ nodes: [
+      { id: 'if1', kind: 'if' },
+      { id: 'inside', kind: 'guard', parent: 'if1' },
+      { id: 'outside', kind: 'guard', executionAfter: 'inside' },
+    ] });
+    expect(messages(crossScope).join()).toContain('same scope');
+    const cycle = project({ nodes: [
+      { id: 'a', kind: 'guard', executionAfter: 'b' },
+      { id: 'b', kind: 'guard', executionAfter: 'a' },
+    ] });
+    expect(stableOrder(cycle).cycle).toEqual(['a', 'b']);
   });
 });
 

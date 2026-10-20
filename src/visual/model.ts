@@ -150,18 +150,28 @@ interface NodeBase {
   readonly branch?: IfBranch;
 }
 
+/** Statement nodes can pin one explicit predecessor; data edges still add their own ordering dependencies. */
+type StatementNodeBase = NodeBase & { readonly executionAfter?: string };
+
 export type GraphNode =
-  | (NodeBase & { readonly kind: 'call'; readonly contractId: string; readonly signature: string; readonly failureMode?: CallFailureMode })
+  | (StatementNodeBase & { readonly kind: 'call'; readonly contractId: string; readonly signature: string; readonly failureMode?: CallFailureMode })
   | (NodeBase & { readonly kind: 'context'; readonly name: ContextName })
   | (NodeBase & { readonly kind: 'literal'; readonly literalType: LiteralType; readonly literal: string })
   | (NodeBase & { readonly kind: 'binary'; readonly op: BinaryOp })
   | (NodeBase & { readonly kind: 'balance' })
-  | (NodeBase & { readonly kind: 'keccak'; readonly data: string })
-  | (NodeBase & { readonly kind: 'send'; readonly failureMode?: CallFailureMode })
-  | (NodeBase & { readonly kind: 'rawcall'; readonly calldata: string; readonly failureMode?: CallFailureMode })
-  | (NodeBase & { readonly kind: 'guard' })
-  | (NodeBase & { readonly kind: 'if'; /** @deprecated Legacy embedded ELSE marker; converted on load. */ readonly hasElse?: boolean; /** Auto-created success gate owned by a call node. */ readonly autoSuccessFor?: string })
+  | (StatementNodeBase & { readonly kind: 'keccak'; readonly data: string })
+  | (StatementNodeBase & { readonly kind: 'send'; readonly failureMode?: CallFailureMode })
+  | (StatementNodeBase & { readonly kind: 'rawcall'; readonly calldata: string; readonly failureMode?: CallFailureMode })
+  | (StatementNodeBase & { readonly kind: 'guard' })
+  | (StatementNodeBase & { readonly kind: 'if'; /** @deprecated Legacy embedded ELSE marker; converted on load. */ readonly hasElse?: boolean; /** Auto-created success gate owned by a call node. */ readonly autoSuccessFor?: string })
   | (NodeBase & { readonly kind: 'else' });
+
+export type StatementNode = Extract<GraphNode, { kind: 'call' | 'keccak' | 'send' | 'rawcall' | 'guard' | 'if' }>;
+
+export function isStatementNode(node: GraphNode): node is StatementNode {
+  return node.kind === 'call' || node.kind === 'keccak' || node.kind === 'send'
+    || node.kind === 'rawcall' || node.kind === 'guard' || node.kind === 'if';
+}
 
 export interface GraphEndpoint {
   readonly node: string;

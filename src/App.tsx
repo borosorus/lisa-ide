@@ -24,7 +24,7 @@ import { GraphError, generateVisualSource } from './visual/generate';
 import { VisualCanvas, type CanvasApi } from './visual/VisualCanvas';
 import {
   addContract, addNode, connectPort, duplicateNode, moveGraphNodes, removeContract, removeEdge, removeNodes, resetCanvas, setCallFailureMode,
-  setNodeFrameSize, updateContract, updateNode,
+  setExecutionAfter, setNodeFrameSize, updateContract, updateNode,
 } from './visual/projectState';
 import { createId, emptyProject, type GraphNode, type GraphNodeDraft, type ScopeTarget, type Vec2, type VisualProject } from './visual/model';
 import { isContainer } from './visual/controlFlow';
@@ -48,7 +48,7 @@ function diagnosticFrom(error: unknown): CompileDiagnostic {
   return { message: error instanceof Error ? error.message : String(error) };
 }
 
-const DEFAULT_STORED = { version: 2 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
+const DEFAULT_STORED = { version: 3 as const, mode: 'code' as AuthoringMode, codeSource: null, visual: emptyProject() };
 
 /** Pane heading: a quiet icon carrying the eye to what the pane is for. */
 function PaneTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
@@ -96,7 +96,7 @@ export default function App() {
   }
 
   useEffect(() => () => client.current?.dispose(), []);
-  useEffect(() => saveStoredProject({ version: 2, mode, codeSource: source, visual: project }), [mode, source, project]);
+  useEffect(() => saveStoredProject({ version: 3, mode, codeSource: source, visual: project }), [mode, source, project]);
   // One pure validation pass feeds both the canvas error states and compile.
   const diagnostics = useMemo(() => validateProject(project), [project]);
 
@@ -568,6 +568,7 @@ export default function App() {
               if (id !== null) setSelectedEdgeId(null);
             }}
             onDuplicateSelected={duplicateSelectedNode}
+            onSetExecutionAfter={(id, predecessorId) => editVisual(p => setExecutionAfter(p, id, predecessorId))}
             onSelectEdge={id => {
               setSelectedEdgeId(id);
               if (id !== null) {

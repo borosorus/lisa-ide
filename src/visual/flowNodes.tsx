@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Handle, Position, useUpdateNodeInternals, useViewport, type NodeProps } from '@xyflow/react';
 import { inputPorts, outputPorts, type PortSpec } from './ports';
 import { type Frame } from './containment';
-import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfFrameSize, type LiteralType, type VisualProject } from './model';
+import { IF_MIN_SIZE, BINARY_OPS, CONTEXT_NAMES, isStatementNode, isValidLiteral, LITERAL_TYPES, type BinaryOp, type ContextName, type GraphNode, type IfFrameSize, type LiteralType, type VisualProject } from './model';
 import { isBytesHex } from '../compile/hex';
 import type { NodeErrors } from './validate';
 import { pairedIf } from './controlFlow';
@@ -33,6 +33,8 @@ export interface LisaNodeData extends Record<string, unknown> {
   errors?: NodeErrors;
   /** True for the currently selected node. */
   selected?: boolean;
+  /** Temporary hint shown while choosing an execution-order relation. */
+  orderHint?: string;
 }
 
 /** Props every inline control needs so canvas gestures don't intercept it. */
@@ -77,7 +79,7 @@ export function nodeLabel(node: GraphNode, project: VisualProject): string {
 const OP_GLYPH: Record<BinaryOp, string> = { add: '+', sub: '−', mul: '×', div: '÷', lt: '<', gt: '>', eq: '=' };
 
 export function LisaNode({ id, data }: NodeProps) {
-  const { node, project, frame, errors, selected } = data as unknown as LisaNodeData;
+  const { node, project, frame, errors, selected, orderHint } = data as unknown as LisaNodeData;
   const edit = useContext(NodeEditContext);
   const [failureModeNote, setFailureModeNote] = useState<string | null>(null);
   const inputs = inputPorts(node, project);
@@ -87,7 +89,8 @@ export function LisaNode({ id, data }: NodeProps) {
 
   // Handles moved between rows when the ABI or literal type changed; xyflow
   // only re-measures on request.
-  const portSignature = [node.kind, ...inputs.map(p => `i${p.name}${p.kind}`), ...outputs.map(p => `o${p.name}${p.kind}${p.connectable === false ? 'x' : ''}`)].join('|');
+  const portSignature = [node.kind,
+    ...inputs.map(p => `i${p.name}${p.kind}`), ...outputs.map(p => `o${p.name}${p.kind}${p.connectable === false ? 'x' : ''}`)].join('|');
   const updateInternals = useUpdateNodeInternals();
   useEffect(() => { updateInternals(id); }, [portSignature, id, updateInternals]);
 
@@ -98,13 +101,17 @@ export function LisaNode({ id, data }: NodeProps) {
   const container = node.kind === 'if' || node.kind === 'else';
   const elseParent = node.kind === 'else' ? pairedIf(project, node.id) : undefined;
   return <div className={`lisa-node lisa-node-${node.kind}${container ? ' lisa-node-container' : ''}${invalid ? ' node-invalid' : ''}${selected ? ' node-selected' : ''}`}
-    title={`${nodeLabel(node, project)}${errorText ? ` — ${errorText}` : ''}`}>
+    title={`${nodeLabel(node, project)}${errorText ? ` — ${errorText}` : ''}${orderHint ? ` — ${orderHint}` : ''}`}>
     {call ? <>
       <div className="node-head"><span className="node-name" title={call.title}>{call.contract}</span></div>
       <div className="node-func" title={call.title}>{call.fn}</div>
     </> : <div className="node-head">
       <span className="node-kind">{node.kind}</span>
     </div>}
+    {isStatementNode(node) && <>
+      <Handle type="source" id="execution-out" position={Position.Bottom} isConnectable={false} className="execution-order-handle" />
+      <Handle type="target" id="execution-in" position={Position.Top} isConnectable={false} className="execution-order-handle" />
+    </>}
     {inputs.map(port => <div className={`node-row left${bad(port.name) ? ' row-invalid' : ''}`} key={port.name}>
       <Handle type="target" id={port.name} position={Position.Left}
         className={`port port-${port.kind}${bad(port.name) ? ' port-invalid' : ''}`}

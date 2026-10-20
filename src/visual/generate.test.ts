@@ -136,6 +136,24 @@ return p;`);
     expect(generateVisualSource(a)).not.toBe(generateVisualSource(b));
   });
 
+  it('emits a statement after its explicit predecessor even when array order is reversed', () => {
+    const project: VisualProject = {
+      ...emptyProject(),
+      contracts: [
+        { id: 'c1', name: 'TOKEN', address: USDC, functions: [{ signature: 'snapshot()', name: 'snapshot', inputs: [], outputs: ['uint256'], mutability: 'view' }] },
+        { id: 'c2', name: 'VAULT', address: VAULT, functions: VAULT_FNS },
+      ],
+      nodes: [
+        { id: 'later', kind: 'call', contractId: 'c1', signature: 'snapshot()', executionAfter: 'earlier' },
+        { id: 'earlier', kind: 'call', contractId: 'c2', signature: 'stake()' },
+      ],
+      edges: [],
+    };
+    const statements = generateVisualSource(project).split('\n').filter(line => line.includes('encodeCall'));
+    expect(statements[0]).toContain('stake');
+    expect(statements[1]).toContain('snapshot');
+  });
+
   it('decodes only the outputs an edge consumes, at their head offsets', () => {
     const project: VisualProject = {
       ...emptyProject(),

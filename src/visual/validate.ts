@@ -2,7 +2,7 @@ import {
   inputPorts, outputPorts, canConnect, type PortSpec,
 } from './ports';
 import { isBytesHex } from '../compile/hex';
-import { isValidLiteral, type GraphNode, type VisualProject } from './model';
+import { isStatementNode, isValidLiteral, type GraphNode, type VisualProject } from './model';
 import { activeNodeIds, isContainer, pairedElse, validElsePair } from './controlFlow';
 
 /**
@@ -73,6 +73,20 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
         break;
       }
       parent = parentIf.parent;
+    }
+    if (isStatementNode(node) && node.executionAfter !== undefined) {
+      const predecessor = byId.get(node.executionAfter);
+      if (!predecessor) {
+        diagnostics.push({ node: node.id, message: `Execution predecessor "${node.executionAfter}" is missing` });
+      } else if (!isStatementNode(predecessor)) {
+        diagnostics.push({ node: node.id, message: 'Execution order must reference another statement' });
+      } else if (predecessor.id === node.id) {
+        diagnostics.push({ node: node.id, message: 'A statement cannot run after itself' });
+      } else if (active.has(node.id) && !active.has(predecessor.id)) {
+        diagnostics.push({ node: node.id, message: 'Execution order cannot reference an inactive ELSE branch' });
+      } else if (predecessor.parent !== node.parent) {
+        diagnostics.push({ node: node.id, message: 'Execution order can only reference a statement in the same scope' });
+      }
     }
     if (!active.has(node.id)) continue;
     if (node.kind === 'call') {
@@ -159,7 +173,7 @@ export function validateProject(project: VisualProject): GraphDiagnostic[] {
 
   const { cycle } = stableOrder(project);
   if (cycle.length > 0) {
-    diagnostics.push({ node: cycle[0], message: `Value cycle detected through: ${cycle.join(' → ')}` });
+    diagnostics.push({ node: cycle[0], message: `Execution dependency cycle detected through: ${cycle.join(' → ')}` });
   }
   if (diagnostics.length === 0) diagnostics.push(...validateTryResults(project));
   return diagnostics;
@@ -293,6 +307,10 @@ export function stableOrder(project: VisualProject): { order: string[]; cycle: s
     if (edge.from.node === edge.to.node) continue;
     if (!byId.has(edge.from.node) || !byId.has(edge.to.node)) continue;
     deps.get(edge.to.node)?.add(edge.from.node);
+  }
+  for (const node of nodes) {
+    if (!isStatementNode(node) || !node.executionAfter || !byId.has(node.executionAfter)) continue;
+    deps.get(node.id)?.add(node.executionAfter);
   }
   // The parent IF waits for producers inside both bodies, while the paired
   // ELSE itself is emitted only inside that IF and is never a root statement.

@@ -69,9 +69,26 @@ describe('parseStoredProject', () => {
     expect(parsed.visual.nodes).toEqual([{ id: 'auto-if', kind: 'if', autoSuccessFor: 'call1' }]);
   });
 
+  it('persists explicit statement order in version 3 and still reads version 2', () => {
+    const visual = {
+      contracts: [],
+      nodes: [
+        { id: 'before', kind: 'guard' },
+        { id: 'after', kind: 'guard', executionAfter: 'before' },
+      ],
+      edges: [], positions: {}, frameSizes: {},
+    };
+    const parsed = parseStoredProject(JSON.stringify({ version: 3, mode: 'visual', codeSource: null, visual }));
+    expect(parsed.version).toBe(3);
+    expect(parsed.visual.nodes[1]).toMatchObject({ executionAfter: 'before' });
+    const old = parseStoredProject(JSON.stringify({ version: 2, mode: 'visual', codeSource: null, visual }));
+    expect(old.version).toBe(3);
+    expect(old.visual.nodes[1]).toMatchObject({ executionAfter: 'before' });
+  });
+
   it('round-trips a full visual project', () => {
     const parsed = parseStoredProject(JSON.stringify(PROJECT));
-    expect(parsed.visual).toEqual(PROJECT.visual as VisualProject);
+    expect(parseStoredProject(JSON.stringify(parsed)).visual).toEqual(parsed.visual as VisualProject);
     expect(parsed.mode).toBe('visual');
   });
 
@@ -114,7 +131,7 @@ describe('parseStoredProject', () => {
   it('rejects malformed structural containers', () => {
     expect(() => parseStoredProject('nope')).toThrowError(/valid JSON/);
     expect(() => parseStoredProject('[1,2]')).toThrowError(/must be an object/);
-    expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, version: 2 }))).toThrowError(/version/);
+    expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, version: 4 }))).toThrowError(/version/);
     expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, mode: 'draw' }))).toThrowError(/mode/);
     expect(() => parseStoredProject(JSON.stringify({ ...PROJECT, visual: {
       ...PROJECT.visual, nodes: { not: 'an array' },
@@ -229,14 +246,14 @@ describe('loadStoredProject', () => {
   it('saves and loads back', () => {
     const storage = new FakeStorage();
     saveStoredProject(PROJECT, storage);
-    expect(loadStoredProject(storage)).toEqual(PROJECT);
+    expect(loadStoredProject(storage)).toEqual(parseStoredProject(JSON.stringify(PROJECT)));
   });
 
   it('migrates a legacy code-only draft', () => {
     const storage = new FakeStorage();
     storage.setItem(SOURCE_STORAGE_KEY, 'const p = createProgram();\nreturn p;');
     const loaded = loadStoredProject(storage);
-    expect(loaded).toEqual({ version: 1, mode: 'code', codeSource: 'const p = createProgram();\nreturn p;', visual: { contracts: [], nodes: [], edges: [], positions: {}, frameSizes: {} } });
+    expect(loaded).toEqual({ version: 3, mode: 'code', codeSource: 'const p = createProgram();\nreturn p;', visual: { contracts: [], nodes: [], edges: [], positions: {}, frameSizes: {} } });
   });
 
   it('recovers to null on corrupt saved state', () => {

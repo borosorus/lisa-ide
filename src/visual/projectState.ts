@@ -1,12 +1,13 @@
 import {
   clampFrameSize, createId, IF_DEFAULT_SIZE,
-  type ContractResource, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type ScopeTarget, type Vec2, type VisualProject,
+  isStatementNode, type ContractResource, type GraphEdge, type GraphNode, type IfBranch, type IfFrameSize, type ScopeTarget, type Vec2, type VisualProject,
 } from './model';
 import { descendants, expandIfFrames } from './containment';
 import { pairedElse, pairedIf } from './controlFlow';
 import { isContainer } from './controlFlow';
 import { nodeSize } from './spawnPosition';
 import { tryOutputGates } from './validate';
+import { canSetExecutionAfter } from './executionOrder';
 
 /**
  * Pure VisualProject transitions. Every edit to semantic data lives here so
@@ -109,6 +110,12 @@ export function duplicateNode(
       id,
       ...(parent === undefined ? {} : { parent }),
     } as GraphNode;
+    // Duplicates begin in Automatic order; copying an explicit relation could
+    // unexpectedly constrain the original or the new statement.
+    if (isStatementNode(clone) && clone.executionAfter !== undefined) {
+      const { executionAfter: _executionAfter, ...automatic } = clone;
+      clone = automatic as GraphNode;
+    }
     if (node.parent !== undefined && parent === undefined) {
       const { parent: _parent, branch: _branch, ...unscoped } = clone;
       clone = unscoped as GraphNode;
@@ -297,10 +304,18 @@ function dropNodes(project: VisualProject, ids: string[]): VisualProject {
   }
   const touches = (edge: GraphEdge, set: Set<string>) =>
     set.has(edge.from.node) || set.has(edge.to.node);
-  const nodes = project.nodes.filter(n => !doomed.has(n.id)).map(node =>
-    node.kind === 'if' && node.autoSuccessFor && doomed.has(node.autoSuccessFor)
-      ? (({ autoSuccessFor: _owner, ...rest }) => rest)(node)
-      : node);
+  const nodes = project.nodes.filter(n => !doomed.has(n.id)).map(node => {
+    let kept = node;
+    if (node.kind === 'if' && node.autoSuccessFor && doomed.has(node.autoSuccessFor)) {
+      const { autoSuccessFor: _owner, ...rest } = node;
+      kept = rest as GraphNode;
+    }
+    if (isStatementNode(kept) && kept.executionAfter && doomed.has(kept.executionAfter)) {
+      const { executionAfter: _predecessor, ...rest } = kept;
+      kept = rest as GraphNode;
+    }
+    return kept;
+  });
   const idsAfter = new Set(nodes.map(n => n.id));
   return {
     ...project,
@@ -340,6 +355,24 @@ export function updateNode(project: VisualProject, id: string, patch: Record<str
 
 export function removeEdge(project: VisualProject, id: string): VisualProject {
   return { ...project, edges: project.edges.filter(e => e.id !== id) };
+}
+
+/** Set or clear the explicit predecessor constraint for a statement. */
+export function setExecutionAfter(project: VisualProject, nodeId: string, predecessorId: string | null): VisualProject {
+  const node = project.nodes.find(candidate => candidate.id === nodeId);
+  if (!node || !isStatementNode(node)) return project;
+  if (predecessorId === null) {
+    if (node.executionAfter === undefined) return project;
+    return { ...project, nodes: project.nodes.map(candidate => {
+      if (candidate.id !== nodeId || !isStatementNode(candidate)) return candidate;
+      const { executionAfter: _predecessor, ...automatic } = candidate;
+      return automatic as GraphNode;
+    }) };
+  }
+  if (!canSetExecutionAfter(project, nodeId, predecessorId)) return project;
+  return { ...project, nodes: project.nodes.map(candidate => candidate.id === nodeId && isStatementNode(candidate)
+    ? { ...candidate, executionAfter: predecessorId } as GraphNode
+    : candidate) };
 }
 
 /**
