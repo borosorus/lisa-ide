@@ -48,6 +48,7 @@ function project(
   };
 }
 
+/** Canvas-first walkthroughs, intentionally separate from source code examples. */
 export const VISUAL_EXAMPLES: readonly VisualExample[] = [
   {
     id: 'token-balance-transfer',
@@ -111,10 +112,10 @@ export const VISUAL_EXAMPLES: readonly VisualExample[] = [
       { id: 'e14', kind: 'control', from: { node: 'acceptedIf', port: 'else' }, to: { node: 'acceptedElse', port: 'if' } },
     ], {
       caller1: { x: 40, y: 100 }, amount1: { x: 40, y: 280 }, transfer1: { x: 270, y: 150 },
-      success1: { x: 560, y: 80 }, successElse: { x: 1570, y: 80 },
+      success1: { x: 560, y: 80 }, successElse: { x: 1616, y: 80 },
       returned1: { x: 590, y: 200 }, accepted1: { x: 790, y: 200 },
       acceptedIf: { x: 590, y: 330 }, acceptedElse: { x: 1080, y: 330 },
-      record1: { x: 620, y: 470 }, queueFalse: { x: 1110, y: 470 }, queueRevert: { x: 1220, y: 200 },
+      record1: { x: 620, y: 470 }, queueFalse: { x: 1110, y: 470 }, queueRevert: { x: 1640, y: 200 },
     }, { success1: { width: 1000, height: 650 }, successElse: { width: 500, height: 400 },
       acceptedIf: { width: 420, height: 280 }, acceptedElse: { width: 420, height: 280 } }),
   },

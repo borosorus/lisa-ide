@@ -146,8 +146,15 @@ export const SourceEditor = forwardRef<SourceEditorHandle, {
             '.cm-activeLine': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.04)` },
             '.cm-activeLineGutter': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.04)` },
             '.cm-cursor': { borderLeftColor: tokens.accent.primary },
-            '.cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.06) !important` },
-            '&.cm-focused .cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.primaryRgb}, 0.08) !important` },
+            // The standard text selection is easy to miss during long-press
+            // selection on touch screens; use a saturated blue tint with
+            // enough contrast against both the editor surface and syntax colors.
+            '.cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.secondaryRgb}, 0.34) !important` },
+            '&.cm-focused .cm-selectionBackground': { backgroundColor: `rgba(${tokens.accent.secondaryRgb}, 0.42) !important` },
+            '.cm-content ::selection': {
+              backgroundColor: `rgba(${tokens.accent.secondaryRgb}, 0.42) !important`,
+              color: `${tokens.text.primary} !important`,
+            },
             '.cm-placeholder': { color: tokens.text.muted },
             '.cm-tooltip': {
               backgroundColor: tokens.surface.paper,
