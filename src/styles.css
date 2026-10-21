@@ -73,6 +73,8 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 .canvas-selection-actions .MuiButton-contained { color: var(--lisa-on-primary); }
 .canvas-host .react-flow__controls { border: 1px solid var(--lisa-border-strong); border-radius: 10px; overflow: hidden; box-shadow: 0 4px 14px rgba(var(--lisa-text-rgb), 0.14); }
 .canvas-host .react-flow__controls-button { background: var(--lisa-paper); border-bottom: 1px solid var(--lisa-border); fill: var(--lisa-text-secondary); width: 34px; height: 34px; }
+.canvas-host .react-flow__controls.horizontal .react-flow__controls-button { border-right: 1px solid var(--lisa-border); border-bottom: 0; }
+.canvas-host .react-flow__controls.horizontal .react-flow__controls-button:last-child { border-right: 0; }
 .canvas-host .react-flow__controls-button:hover { background: var(--lisa-raised); color: var(--lisa-text); }
 .canvas-host .react-flow__minimap { background: var(--lisa-paper); border: 1px solid var(--lisa-border-strong); border-radius: 8px; }
 .canvas-host .react-flow {
@@ -125,6 +127,7 @@ kbd { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--li
 .node-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; min-height: 22px; }
 .node-row.left { justify-content: flex-start; }
 .node-row.right { justify-content: flex-end; }
+.node-row.control > .react-flow__handle.source { margin-left: auto; }
 .node-row .react-flow__handle { position: relative; margin: 0; }
 .port-label { font-size: 11px; color: var(--lisa-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .port-label.payable-value { color: var(--lisa-warning); }

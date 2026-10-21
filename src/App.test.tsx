@@ -53,6 +53,7 @@ vi.mock('./visual/VisualCanvas', () => ({
     };
     return <>
     <div aria-label="Visual canvas" data-fit-view-request={props.fitViewRequest ?? 0} />
+    <button aria-label="Arrange" onClick={props.onArrange} />
     {/* Context cards inline-edit their value; the test drives that control. */}
     {props.project.nodes.filter((n: { kind: string }) => n.kind === 'context').map((n: { id: string; name: string }) =>
       <select key={n.id} aria-label="Context value" value={n.name}
@@ -374,6 +375,19 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Generated source' }));
     expect(screen.getByLabelText('Generated source')).toHaveTextContent('createProgram');
     expect(compileMock).toHaveBeenCalledWith(expect.stringContaining('createProgram'));
+  });
+
+  it('fits the canvas after loading a visual example', async () => {
+    render(<App />);
+    toVisual();
+    fireEvent.mouseDown(screen.getByRole('combobox'), { button: 0 });
+    fireEvent.click(await screen.findByRole('option', { name: 'Claim using a hashed commitment' }));
+
+    expect(screen.getByLabelText('Visual canvas')).toHaveAttribute('data-fit-view-request', '1');
+
+    fireEvent.mouseDown(screen.getByRole('combobox'), { button: 0 });
+    fireEvent.click(await screen.findByRole('option', { name: 'Claim using a hashed commitment' }));
+    expect(screen.getByLabelText('Visual canvas')).toHaveAttribute('data-fit-view-request', '2');
   });
 
   it('lowers balance, hash, and guard nodes into the source it compiles', async () => {

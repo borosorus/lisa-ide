@@ -11,7 +11,6 @@ import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
 import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded';
-import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { SourceEditor, type SourceEditorHandle } from './editor/SourceEditor';
@@ -132,7 +131,7 @@ export default function App() {
     requestNodeFocus(null);
     keepUndoSlot.current = false;
     editVisual(example.createProject());
-    setVisualCanvasKey(key => key + 1);
+    setFitViewRequest(request => request + 1);
     setNotice(`Loaded visual example: ${example.label}`);
   }
 
@@ -556,14 +555,6 @@ export default function App() {
                 project={project}
                 onAdd={addVisualNode}
               />
-              <Tooltip title="Arrange nodes by dependency without changing the program">
-                <span>
-                  <Button size="small" variant="outlined" startIcon={<AutoFixHighRoundedIcon fontSize="small" />}
-                    disabled={project.nodes.length === 0} onClick={arrangeNodes}>
-                    Arrange
-                  </Button>
-                </span>
-              </Tooltip>
               <ExampleSelect
                 options={VISUAL_EXAMPLES}
                 ariaLabel="Load visual example"
@@ -587,6 +578,7 @@ export default function App() {
             canvasApi={canvasApi}
             fitViewRequest={fitViewRequest}
             project={project}
+            onArrange={arrangeNodes}
             onMoveNodes={moveNodes}
             onAddCallNode={addCallNode}
             onDeleteNodes={deleteNodes}

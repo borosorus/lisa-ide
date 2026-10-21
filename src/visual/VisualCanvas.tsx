@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
-  Background, Controls, Panel, ReactFlow, ReactFlowProvider, useReactFlow,
+  Background, ControlButton, Controls, Panel, ReactFlow, ReactFlowProvider, useReactFlow,
   MarkerType, type Connection, type Edge, type Node,
 } from '@xyflow/react';
 import { Button, Stack, Tooltip, Typography } from '@mui/material';
+import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
+import FitScreenRoundedIcon from '@mui/icons-material/FitScreenRounded';
 import '@xyflow/react/dist/style.css';
 import { LisaNode, NodeEditContext, nodeLabel, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
@@ -20,6 +22,7 @@ import { ExecutionOrderControl } from './ExecutionOrderControl';
 import { FUNCTION_MIME } from './ContractsPanel';
 
 const nodeTypes = { lisa: LisaNode };
+const FIT_VIEW_OPTIONS = { padding: 0.12, maxZoom: 1, duration: 250 } as const;
 const isExecutionOrderEdge = (edge: Pick<Edge, 'data'>) => edge.data?.lisaExecutionOrder === true;
 
 /** Lets the sidebar place click-added nodes in the visible viewport. */
@@ -33,6 +36,7 @@ export interface CanvasApi {
 
 export interface VisualCanvasProps {
   project: VisualProject;
+  onArrange(): void;
   onMoveNodes(changes: Readonly<Record<string, Vec2>>, scopes?: Readonly<Record<string, ScopeTarget | null>>): void;
   onAddCallNode(contractId: string, signature: string, position: Vec2): void;
   onDeleteNodes(ids: string[]): void;
@@ -73,7 +77,7 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, onDuplicateSelected, onSetExecutionAfter, diagnostics, focusNodeId, focusRequest, fitViewRequest, canvasApi,
+  project, onArrange, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, onDuplicateSelected, onSetExecutionAfter, diagnostics, focusNodeId, focusRequest, fitViewRequest, canvasApi,
 }: VisualCanvasProps) {
   const { screenToFlowPosition, fitView, getNodes } = useReactFlow();
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -300,11 +304,14 @@ function Canvas({
   const lastFitRequest = useRef(fitViewRequest ?? 0);
   useEffect(() => {
     if (fitViewRequest === undefined || fitViewRequest === lastFitRequest.current) return;
-    lastFitRequest.current = fitViewRequest;
     let secondFrame = 0;
     const firstFrame = requestAnimationFrame(() => {
-      // Let controlled nodes and their measured dimensions settle first.
-      secondFrame = requestAnimationFrame(() => void fitView({ padding: 0.12, maxZoom: 1, duration: 250 }));
+      // Let React Flow adopt the new controlled nodes before requesting a fit.
+      secondFrame = requestAnimationFrame(() => {
+        lastFitRequest.current = fitViewRequest;
+        // React Flow queues fitView until its ResizeObserver has measured nodes.
+        void fitView(FIT_VIEW_OPTIONS);
+      });
     });
     return () => {
       cancelAnimationFrame(firstFrame);
@@ -428,7 +435,28 @@ function Canvas({
         }}
       >
         <Background color={tokens.canvas.grid} gap={24} />
-        <Controls orientation="horizontal" showInteractive={false} />
+        <Controls orientation="horizontal" showInteractive={false} showFitView={false}>
+          <Tooltip title="Fit view" placement="top" enterDelay={300}>
+            <ControlButton
+              aria-label="Fit view"
+              onClick={() => void fitView(FIT_VIEW_OPTIONS)}
+            >
+              <FitScreenRoundedIcon fontSize="small" />
+            </ControlButton>
+          </Tooltip>
+          <Tooltip title="Arrange nodes" placement="top" enterDelay={300}>
+            <ControlButton
+              aria-label="Arrange"
+              disabled={project.nodes.length === 0}
+              onClick={event => {
+                event.stopPropagation();
+                onArrange();
+              }}
+            >
+              <AutoFixHighRoundedIcon fontSize="small" />
+            </ControlButton>
+          </Tooltip>
+        </Controls>
         {selectedNodeId !== null && project.nodes.some(node => node.id === selectedNodeId) && (
           <Panel position="top-right" className="canvas-selection-actions">
             {project.nodes.some(node => node.id === selectedNodeId && isStatementNode(node)) &&

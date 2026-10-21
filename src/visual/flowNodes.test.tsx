@@ -60,6 +60,16 @@ describe('LisaNode inline editing', () => {
     fireEvent.change(screen.getByLabelText('Context value'), { target: { value: 'CALLER' } });
     expect(patch).toHaveBeenCalledWith('ctx1', { name: 'CALLER' });
   });
+
+  it('keeps the Keccak output handle on the far edge of its row', () => {
+    const { container } = renderNode({ id: 'hash1', kind: 'keccak', data: '0x01' }, emptyProject());
+    const outputRow = container.querySelector('.lisa-node-keccak .node-row.control')!;
+
+    expect(outputRow.querySelector('input[aria-label="Hash data"]')).not.toBeNull();
+    const handle = outputRow.querySelector('[data-handleid="out"]');
+    expect(handle).not.toBeNull();
+    expect(handle!.className).toContain('source');
+  });
 });
 
 describe('LisaNode call outputs', () => {
