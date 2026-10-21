@@ -57,9 +57,8 @@ saved state falls back to a fresh project.
 A compiled program can be executed through an EIP-7702 `LisaAccount` from the strip below the toolbar.
 Deployment addresses are listed by chain in `src/lisa-account/deployments.json`; no environment
 variables are needed. Ethereum mainnet is the preferred network, and Sepolia remains available for
-testing. Mainnet execution stays disabled until its runtime and LisaAccount implementation addresses
-are added to the registry. The connected wallet account is always read from the wallet and is not a
-fixed deployment setting.
+testing. Both chains have a configured runtime and LisaAccount implementation. The connected wallet
+account is always read from the wallet and is not a fixed deployment setting.
 
 Each chain entry identifies the deployed LISA runtime and the LisaAccount implementation a delegation
 must point at. The runtime address is checked for code, and account inspection verifies both the
@@ -108,7 +107,7 @@ npm run build
 
 ## Authoring source
 
-Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser. The Source header includes ready-to-adapt code examples, and the Canvas header includes loadable visual graphs for token checks, try-call fallbacks, native payments, hashing, and raw calldata.
+Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser. The Source header includes ready-to-adapt code examples, including mainnet templates for a Curve quote and swap, Lido staking, and Aave supply. These protocol examples assume the account is delegated on Ethereum mainnet and has the required assets. The Aave program grants its exact USDC allowance immediately before supplying. Review each address, amount, and minimum output before execution. The Canvas header includes loadable visual graphs for token checks, try-call fallbacks, native payments, hashing, and raw calldata.
 
 ```js
 const p = createProgram();

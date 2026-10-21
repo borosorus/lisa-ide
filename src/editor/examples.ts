@@ -63,28 +63,68 @@ return p;`,
   },
   {
     id: 'quote-and-swap',
-    label: 'Quote, then swap',
-    description: 'Use a fallible read-only quote, apply 0.5% slippage, then submit a swap only when the quote succeeds.',
+    label: 'Quote and swap ETH to USDT on Curve',
+    description: 'Quote Curve Tricrypto2, then swap 0.01 ETH with 0.5% slippage protection. SELF receives USDT.',
     source: `const p = createProgram();
-// Example router interface: quoteExactInput returns one uint256 amount.
-const ROUTER = "0x2222222222222222222222222222222222222222";
-const TOKEN_IN = "0x3333333333333333333333333333333333333333";
-const TOKEN_OUT = "0x4444444444444444444444444444444444444444";
-const AMOUNT_IN = 1000000n;
+// Ethereum mainnet Curve Tricrypto2: coin 0 is USDT, coin 1 is WBTC, coin 2 is WETH.
+// Curve's registry docs include this pool and its crypto-pool quote interface:
+// https://knowledge.curve.finance/developer/amm/router/curve-registry-exchange
+const POOL = "0xD51a44d3FaE010294C616388b506AcdA1bfAAE46";
+const AMOUNT_IN = 10000000000000000n; // 0.01 ETH in wei
 
-const quote = p.tryStaticCall(
-  ROUTER,
-  encodeCall("quoteExactInput(uint256,address,address)", [AMOUNT_IN, TOKEN_IN, TOKEN_OUT]),
-);
+// Coin 2 is WETH in the pool; use_eth=true lets it accept native ETH as input.
+p.revertUnless(SELFBALANCE.gt(AMOUNT_IN.sub(1n)));
 
-p.if(quote.success, () => {
-  const expectedOut = quote.uint256();
-  const minimumOut = expectedOut.mul(995n).div(1000n);
-  p.call(ROUTER, encodeCall(
-    "swapExactInput(uint256,uint256,address,address)",
-    [AMOUNT_IN, minimumOut, TOKEN_IN, TOKEN_OUT],
-  ));
-});
+// Tricrypto2 uses uint256 coin indices, supported directly by encodeCall.
+const quote = p.staticCall(POOL, encodeCall("get_dy(uint256,uint256,uint256)", [2n, 0n, AMOUNT_IN]));
+const expectedOut = quote.uint256();
+p.revertUnless(expectedOut.gt(0n));
+const minOut = expectedOut.mul(995n).div(1000n); // 0.5% slippage tolerance
+
+// Send native ETH into the pool and receive USDT on SELF.
+p.call(POOL, encodeCall("exchange(uint256,uint256,uint256,uint256,bool)", [2n, 0n, AMOUNT_IN, minOut, true]), AMOUNT_IN);
+
+return p;`,
+  },
+  {
+    id: 'lido-stake-eth',
+    label: 'Stake ETH with Lido',
+    description: 'Stake 0.01 ETH through Lido mainnet and receive stETH on SELF. SELF needs ETH for the stake and transaction gas.',
+    source: `const p = createProgram();
+// Ethereum mainnet Lido stETH contract; submit(address) mints stETH to its caller.
+// Interface/deployment: https://docs.lido.fi/contracts/lido/
+const LIDO = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84";
+const REFERRAL = "0x0000000000000000000000000000000000000000";
+const AMOUNT = 10000000000000000n; // 0.01 ETH in wei
+
+const stakeLimit = p.staticCall(LIDO, encodeCall("getCurrentStakeLimit()", [])).uint256();
+p.revertUnless(SELFBALANCE.gt(AMOUNT.sub(1n)));
+p.revertUnless(stakeLimit.gt(AMOUNT.sub(1n)));
+p.call(LIDO, encodeCall("submit(address)", [REFERRAL]), AMOUNT);
+
+return p;`,
+  },
+  {
+    id: 'aave-supply-usdc',
+    label: 'Supply USDC to Aave V3',
+    description: 'Approve exactly 10 mainnet USDC to Aave V3, then supply it and receive aUSDC on SELF.',
+    source: `const p = createProgram();
+// Ethereum mainnet deployments: Aave address book and Pool interface.
+// https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Ethereum.sol
+// https://aave.com/docs/aave-v3/smart-contracts/pool
+const AAVE_POOL = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2";
+const USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
+const AMOUNT = 10000000n; // 10 USDC (6 decimals)
+
+const balance = p.staticCall(USDC, encodeCall("balanceOf(address)", [SELF])).uint256();
+p.revertUnless(balance.gt(AMOUNT.sub(1n)));
+
+// Grant the Pool an exact allowance, then consume it in this same execution.
+p.call(USDC, encodeCall("approve(address,uint256)", [AAVE_POOL, AMOUNT]));
+p.call(AAVE_POOL, encodeCall(
+  "supply(address,uint256,address,uint16)",
+  [USDC, AMOUNT, SELF, 0n],
+));
 
 return p;`,
   },
