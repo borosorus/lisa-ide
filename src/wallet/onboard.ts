@@ -2,6 +2,7 @@ import { init } from '@web3-onboard/react';
 import injectedModule from '@web3-onboard/injected-wallets';
 import type { InitOptions, OnboardAPI } from '@web3-onboard/core';
 import { tokens } from '../theme/tokens';
+import { DEFAULT_CHAIN_ID } from '../lisa-account/config';
 
 /**
  * Web3-Onboard setup. Initialization is memoized and lazy: it runs
@@ -16,9 +17,15 @@ import { tokens } from '../theme/tokens';
  * EIP-1193 provider, and the chain actually in use is read back from the wallet
  * rather than assumed from this list.
  */
-export const SUPPORTED_CHAINS: InitOptions['chains'] = [
+const chains: NonNullable<InitOptions['chains']> = [
   { id: '0x1', token: 'ETH', label: 'Ethereum', rpcUrl: 'https://ethereum-rpc.publicnode.com' },
   { id: '0xaa36a7', token: 'SepoliaETH', label: 'Sepolia', rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com' },
+];
+
+const defaultChainHex = `0x${BigInt(DEFAULT_CHAIN_ID).toString(16)}`;
+export const SUPPORTED_CHAINS: InitOptions['chains'] = [
+  ...chains.filter(chain => chain.id.toLowerCase() === defaultChainHex),
+  ...chains.filter(chain => chain.id.toLowerCase() !== defaultChainHex),
 ];
 
 const injected = injectedModule();

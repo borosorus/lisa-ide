@@ -3,7 +3,7 @@ import type { CompileOutput } from '../compile/types';
 import { inspectLisaAccount } from '../lisa-account/inspect';
 import { prepareExecuteLisaTransaction } from '../lisa-account/execute';
 import { LisaError, type DeploymentConfig } from '../lisa-account/types';
-import { DEPLOYMENT, deploymentLabel } from './deployment';
+import { deploymentForChain, deploymentLabel } from './deployment';
 import { broadcastHash, normalizeError } from './errors';
 import {
   canExecute, deriveGate,
@@ -77,13 +77,13 @@ function gateAlert(gate: ExecutionGate): GateAlert | null {
   switch (gate.kind) {
     case 'wallet-disconnected': return { severity: 'info', text: 'Connect a wallet to inspect its LisaAccount.' };
     case 'wallet-error': return { severity: 'error', text: gate.reason };
-    case 'unconfigured': return { severity: 'info', text: `LISA deployment not configured. ${deploymentLabel()}` };
+    case 'unconfigured': return { severity: 'info', text: `LISA deployment not configured. ${deploymentLabel({ kind: 'unconfigured' })}` };
     case 'invalid-config': return { severity: 'error', text: deploymentLabel({ kind: 'invalid', reason: gate.reason }) };
     case 'undelegated': return { severity: 'info', text: 'This account has no EIP-7702 delegation. Execution stays disabled until it is delegated to the configured LisaAccount.' };
     case 'other-delegation': return { severity: 'error', text: `Account is delegated to ${gate.implementation}, not the configured LisaAccount implementation.` };
     case 'invalid-delegation': return { severity: 'error', text: `Delegation designator is malformed: ${gate.reason}` };
     case 'invalid-lisa': return { severity: 'error', text: `Delegated to the configured LisaAccount but ${gate.reason}` };
-    case 'runtime-no-code': return { severity: 'error', text: `Configured runtime ${gate.runtime} has no code deployed. Check VITE_LISA_RUNTIME_ADDRESS.` };
+    case 'runtime-no-code': return { severity: 'error', text: `Configured runtime ${gate.runtime} has no code deployed. Check the chain deployment config.` };
     case 'runtime-mismatch': return { severity: 'error', text: `LisaAccount runtime ${gate.runtime} does not match the configured runtime ${gate.expected}.` };
     case 'wrong-chain': return { severity: 'error', text: `Connected to chain ${gate.actual}; the configured LISA deployment is on chain ${gate.expected}. The account is not inspected or executed here.` };
     case 'rpc-error': return { severity: 'error', text: gate.reason };
@@ -95,9 +95,15 @@ function gateAlert(gate: ExecutionGate): GateAlert | null {
 
 export function useWalletExecution(
   output: CompileOutput | null,
-  config: DeploymentConfig = DEPLOYMENT,
+  configOverride?: DeploymentConfig,
 ): ExecutionController {
   const session = useWalletSession();
+  // The registry resolver returns a new object. Keep it stable between renders
+  // so the account inspection effect doesn't restart while an RPC read is pending.
+  const config = useMemo(
+    () => configOverride ?? deploymentForChain(session.chainId),
+    [configOverride, session.chainId],
+  );
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [inspectionError, setInspectionError] = useState<string | null>(null);
   const [phase, setPhase] = useState<TransactionPhase>(IDLE);

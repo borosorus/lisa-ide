@@ -55,20 +55,15 @@ saved state falls back to a fresh project.
 ## Wallet execution (optional)
 
 A compiled program can be executed through an EIP-7702 `LisaAccount` from the strip below the toolbar.
-It is entirely opt-in: with no configuration the IDE still starts and still connects a wallet, and
-every LISA action stays disabled behind a short "LISA deployment not configured" note.
+Deployment addresses are listed by chain in `src/lisa-account/deployments.json`; no environment
+variables are needed. Ethereum mainnet is the preferred network, and Sepolia remains available for
+testing. Mainnet execution stays disabled until its runtime and LisaAccount implementation addresses
+are added to the registry. The connected wallet account is always read from the wallet and is not a
+fixed deployment setting.
 
-| Variable | Meaning |
-| --- | --- |
-| `VITE_LISA_CHAIN_ID` | Chain the deployment lives on, decimal or hex |
-| `VITE_LISA_RUNTIME_ADDRESS` | Deployed LISA runtime the LisaAccount delegatecalls into |
-| `VITE_LISA_ACCOUNT_IMPLEMENTATION_ADDRESS` | LisaAccount implementation a delegation must point at |
-
-Set them in `.env.local` (see `.env.example`). They are deployment configuration, not VM semantics,
-which is why they live here rather than in `@bosorus/lisa-evm`. All three are required together and
-validated before use: absent is a normal, unconfigured build, while a partial or malformed set —
-including a chain id of `0` — is reported as an invalid configuration rather than guessed at. One
-deployment on one chain is all v1 supports.
+Each chain entry identifies the deployed LISA runtime and the LisaAccount implementation a delegation
+must point at. The runtime address is checked for code, and account inspection verifies both the
+implementation and the runtime reported by `lisaRuntime()` before execution.
 
 The flow is: connect an injected wallet → check it is on the configured chain → read the connected
 account's code → accept it only if that code is exactly `0xef0100 ++ implementation` for the configured
@@ -79,10 +74,9 @@ account itself** through its own delegated code → transaction hash, then recei
 
 Anything else fails closed, each with its own reason:
 
-- **Wrong network.** An account on another chain is never inspected as if it belonged to this
-  deployment — the same address elsewhere is a different account. No code is read there at all. The
-  strip names both chains and offers **Switch network**, which asks the wallet and only acts on that
-  click; nothing switches by itself.
+- **No deployment on this network.** An account on a chain without a configured LISA deployment is
+  never inspected as if it belonged to another deployment — the same address elsewhere is a different
+  account. No code is read there, and the app never switches networks by itself.
 - **Runtime with no code.** The account naming a runtime proves intent, not existence, so an empty
   address that matches the configuration is its own failure state rather than a false "ready".
 - No delegation, a foreign implementation, a malformed designator, or a runtime mismatch.

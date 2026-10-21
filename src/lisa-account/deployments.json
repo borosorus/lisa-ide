@@ -1,0 +1,15 @@
+{
+  "defaultChainId": "1",
+  "chains": {
+    "1": {
+      "name": "Ethereum Mainnet",
+      "runtime": "0x7F6b058AAF78BC690f781F0914499C460Ff342D9",
+      "accountImplementation": "0xE702F9FB288Bb97d359DA5eCB42532EAC6078871"
+    },
+    "11155111": {
+      "name": "Sepolia",
+      "runtime": "0x8f024da6317209Eb756f34D3D489A5b4de6152DC",
+      "accountImplementation": "0x7f5F0a949f5F9Dc78d1F8e7F648Ec12AF24ADa82"
+    }
+  }
+}
