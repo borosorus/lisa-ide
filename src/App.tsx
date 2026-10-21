@@ -11,6 +11,7 @@ import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
 import DescriptionRoundedIcon from '@mui/icons-material/DescriptionRounded';
 import DashboardRoundedIcon from '@mui/icons-material/DashboardRounded';
 import LibraryBooksRoundedIcon from '@mui/icons-material/LibraryBooksRounded';
+import AutoFixHighRoundedIcon from '@mui/icons-material/AutoFixHighRounded';
 import RestartAltRoundedIcon from '@mui/icons-material/RestartAltRounded';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { SourceEditor, type SourceEditorHandle } from './editor/SourceEditor';
@@ -75,10 +76,11 @@ export default function App() {
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState(0);
   const [visualCanvasKey, setVisualCanvasKey] = useState(0);
+  const [fitViewRequest, setFitViewRequest] = useState(0);
   const [libraryOpen, setLibraryOpen] = useState(true);
   // One-deep, single-slot undo for graph deletions: a hand-built graph can lose
   // minutes of wiring to one Delete keypress, and that keystroke is silent.
-  const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string; refitOnUndo?: boolean } | null>(null);
+  const [undo, setUndo] = useState<{ snapshot: VisualProject; message: string; refitOnUndo?: boolean; positional?: boolean } | null>(null);
   // Lets a deletion's own editVisual pass through without voiding the slot it just filled.
   const keepUndoSlot = useRef(false);
   // Output is a shared bottom dock. It opens when the user compiles or imports.
@@ -297,6 +299,23 @@ export default function App() {
     setNotice('Canvas reset. Contract resources remain available.');
   }
 
+  function arrangeNodes() {
+    const result = canvasApi.current?.arrange();
+    if (!result) return;
+    if (result.error) {
+      setNotice(result.error);
+      return;
+    }
+    if (!result.changed) {
+      setNotice(result.warning ?? 'Canvas is already arranged.');
+      return;
+    }
+    editVisual(result.project, true);
+    setUndo({ snapshot: project, message: 'Nodes arranged', positional: true });
+    setFitViewRequest(request => request + 1);
+    setNotice(result.warning ?? 'Nodes arranged by dependency.');
+  }
+
   function changeCallFailureMode(callId: string, mode: 'revert' | 'continue'): string | undefined {
     const call = project.nodes.find(node => node.id === callId);
     if (!call || !['call', 'rawcall', 'send'].includes(call.kind)) return;
@@ -328,15 +347,19 @@ export default function App() {
     return undefined;
   }
 
-  /** Restore the deleted graph; any compiled output was already invalidated. */
-  function undoDelete() {
+  /** Restore the last graph action; presentation undo keeps compiled output. */
+  function undoLastAction() {
     const entry = undo;
     setUndo(null);
     if (!entry) return;
-    editVisual(entry.snapshot);
-    setSelectedId(null);
-    setSelectedEdgeId(null);
-    requestNodeFocus(null);
+    editVisual(entry.snapshot, entry.positional === true);
+    if (entry.positional) {
+      setFitViewRequest(request => request + 1);
+    } else {
+      setSelectedId(null);
+      setSelectedEdgeId(null);
+      requestNodeFocus(null);
+    }
     if (entry.refitOnUndo) setVisualCanvasKey(key => key + 1);
   }
 
@@ -533,6 +556,14 @@ export default function App() {
                 project={project}
                 onAdd={addVisualNode}
               />
+              <Tooltip title="Arrange nodes by dependency without changing the program">
+                <span>
+                  <Button size="small" variant="outlined" startIcon={<AutoFixHighRoundedIcon fontSize="small" />}
+                    disabled={project.nodes.length === 0} onClick={arrangeNodes}>
+                    Arrange
+                  </Button>
+                </span>
+              </Tooltip>
               <ExampleSelect
                 options={VISUAL_EXAMPLES}
                 ariaLabel="Load visual example"
@@ -554,6 +585,7 @@ export default function App() {
           <VisualCanvas
             key={visualCanvasKey}
             canvasApi={canvasApi}
+            fitViewRequest={fitViewRequest}
             project={project}
             onMoveNodes={moveNodes}
             onAddCallNode={addCallNode}
@@ -637,7 +669,7 @@ export default function App() {
         autoHideDuration={7000}
         onClose={() => setUndo(null)}
         message={undo?.message ?? ''}
-        action={<Button size="small" color="inherit" onClick={undoDelete}>Undo</Button>}
+        action={<Button size="small" color="inherit" onClick={undoLastAction}>Undo</Button>}
       />
     </Box>
   </ThemeProvider>;

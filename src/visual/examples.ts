@@ -1,4 +1,5 @@
 import type { ContractFunction, ContractResource, GraphEdge, GraphNode, VisualProject } from './model';
+import { arrangeProject } from './arrange';
 
 export interface VisualExample {
   readonly id: string;
@@ -33,7 +34,7 @@ function project(
   positions: VisualProject['positions'],
   frameSizes: VisualProject['frameSizes'] = {},
 ): VisualProject {
-  return {
+  const initial: VisualProject = {
     contracts: contracts.map(contract => ({ ...contract, functions: contract.functions.map(fn => ({
       ...fn,
       inputs: [...fn.inputs],
@@ -46,6 +47,11 @@ function project(
     positions: { ...positions },
     frameSizes: { ...frameSizes },
   };
+  // Keep the authored coordinates as a safe fallback for malformed examples,
+  // but ship every valid example in the same deterministic layout users get
+  // from the Arrange action.
+  const arranged = arrangeProject(initial);
+  return arranged.error ? initial : arranged.project;
 }
 
 /** Canvas-first walkthroughs, intentionally separate from source code examples. */

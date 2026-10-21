@@ -9,6 +9,7 @@ import '@xyflow/react/dist/style.css';
 import { LisaNode, NodeEditContext, nodeLabel, portsForNode, type NodeEditApi } from './flowNodes';
 import { canConnect } from './ports';
 import { absolutePosition, iframes, normalizeDrag } from './containment';
+import { arrangeProject, type ArrangeResult } from './arrange';
 import { indexDiagnostics, type GraphDiagnostic } from './validate';
 import { tokens } from '../theme/tokens';
 import type { GraphNode, IfFrameSize, ScopeTarget, Vec2, VisualProject } from './model';
@@ -26,6 +27,8 @@ export interface CanvasApi {
   viewportCenter(): Vec2 | null;
   /** Flow-space rect of the currently visible canvas area. */
   viewportRect(): { x: number; y: number; width: number; height: number } | null;
+  /** Arrange the current graph using React Flow's measured card sizes. */
+  arrange(): ArrangeResult;
 }
 
 export interface VisualCanvasProps {
@@ -52,6 +55,8 @@ export interface VisualCanvasProps {
   focusNodeId?: string | null;
   /** Monotonic token so selecting the same node repeatedly can reveal it again. */
   focusRequest?: number;
+  /** Monotonic request to fit the complete canvas after a presentation edit. */
+  fitViewRequest?: number;
   /** Host handle for click-to-add placement in the visible viewport. */
   canvasApi?: React.MutableRefObject<CanvasApi | null>;
 }
@@ -68,9 +73,9 @@ export function VisualCanvas(props: VisualCanvasProps) {
 }
 
 function Canvas({
-  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, onDuplicateSelected, onSetExecutionAfter, diagnostics, focusNodeId, focusRequest, canvasApi,
+  project, onMoveNodes, onAddCallNode, onDeleteNodes, onDeleteEdges, onConnect, onPatchNode, onSetFailureMode, onResizeIf, onSelectNode, onSelectEdge, selectedNodeId, selectedEdgeId, onDuplicateSelected, onSetExecutionAfter, diagnostics, focusNodeId, focusRequest, fitViewRequest, canvasApi,
 }: VisualCanvasProps) {
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, getNodes } = useReactFlow();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [orderingSourceId, setOrderingSourceId] = useState<string | null>(null);
   const [orderingMessage, setOrderingMessage] = useState<string | null>(null);
@@ -90,7 +95,15 @@ function Canvas({
       const bottomRight = screenToFlowPosition({ x: rect.right, y: rect.bottom });
       return { x: topLeft.x, y: topLeft.y, width: bottomRight.x - topLeft.x, height: bottomRight.y - topLeft.y };
     },
-  }), [screenToFlowPosition]);
+    arrange: () => {
+      const measured = Object.fromEntries(getNodes().flatMap(node => {
+        const width = node.measured?.width ?? node.width;
+        const height = node.measured?.height ?? node.height;
+        return width && height ? [[node.id, { width, height }]] : [];
+      }));
+      return arrangeProject(project, measured);
+    },
+  }), [screenToFlowPosition, getNodes, project]);
 
   /*
    * The project is canonical and React Flow is a controlled projection, so
@@ -283,6 +296,21 @@ function Canvas({
       if (target) void fitView({ nodes: [{ id: target.id }], maxZoom: 1, duration: 250 });
     }
   }, [focusNodeId, focusRequest, fitView]);
+
+  const lastFitRequest = useRef(fitViewRequest ?? 0);
+  useEffect(() => {
+    if (fitViewRequest === undefined || fitViewRequest === lastFitRequest.current) return;
+    lastFitRequest.current = fitViewRequest;
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      // Let controlled nodes and their measured dimensions settle first.
+      secondFrame = requestAnimationFrame(() => void fitView({ padding: 0.12, maxZoom: 1, duration: 250 }));
+    });
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+    };
+  }, [fitViewRequest, fitView]);
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();

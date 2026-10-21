@@ -6,10 +6,11 @@ import { createArtifact, hashProgram } from './compile/artifact';
 import { bytesFromHex } from './compile/hex';
 import { PROJECT_STORAGE_KEY } from './visual/storage';
 
-const { compileMock, inspectMock, cancelMock } = vi.hoisted(() => ({
+const { compileMock, inspectMock, cancelMock, arrangeMock } = vi.hoisted(() => ({
   compileMock: vi.fn(),
   inspectMock: vi.fn(),
   cancelMock: vi.fn(),
+  arrangeMock: vi.fn(),
 }));
 
 vi.mock('./compile/client', () => {
@@ -44,8 +45,14 @@ vi.mock('./wallet/WalletExecutionPanel', () => ({
   WalletExecutionPanel: ({ execution }: { execution: { output: unknown } }) => <div data-testid="wallet-output">{execution.output === null ? 'not executable' : 'executable'}</div>,
 }));
 vi.mock('./visual/VisualCanvas', () => ({
-  VisualCanvas: (props: Record<string, any>) => <>
-    <div aria-label="Visual canvas" />
+  VisualCanvas: (props: Record<string, any>) => {
+    if (props.canvasApi) props.canvasApi.current = {
+      viewportCenter: () => null,
+      viewportRect: () => null,
+      arrange: () => arrangeMock(props.project),
+    };
+    return <>
+    <div aria-label="Visual canvas" data-fit-view-request={props.fitViewRequest ?? 0} />
     {/* Context cards inline-edit their value; the test drives that control. */}
     {props.project.nodes.filter((n: { kind: string }) => n.kind === 'context').map((n: { id: string; name: string }) =>
       <select key={n.id} aria-label="Context value" value={n.name}
@@ -78,7 +85,8 @@ vi.mock('./visual/VisualCanvas', () => ({
       aria-label="simulate-resize-first-if"
       onClick={() => props.onResizeIf?.(props.project.nodes[0]?.id ?? '', { width: 700, height: 500 })}
     />
-  </>,
+    </>;
+  },
 }));
 
 const output = {
@@ -99,6 +107,7 @@ describe('App', () => {
     compileMock.mockReset();
     inspectMock.mockReset();
     cancelMock.mockReset();
+    arrangeMock.mockReset();
     localStorage.clear();
   });
   afterEach(() => vi.unstubAllGlobals());
@@ -470,6 +479,37 @@ describe('App', () => {
       expect(saved.nodes).toHaveLength(2);
       expect(saved.edges).toHaveLength(1);
     });
+  });
+
+  it('arranges nodes as a presentation edit and can undo without clearing compiled output', async () => {
+    compileMock.mockResolvedValue(output);
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify({
+      version: 3, mode: 'visual', codeSource: null,
+      visual: {
+        contracts: [], nodes: [{ id: 'ctx1', kind: 'context', name: 'SELF' }], edges: [],
+        positions: { ctx1: { x: 900, y: 700 } }, frameSizes: {},
+      },
+    }));
+    arrangeMock.mockImplementation((current: { positions: Record<string, { x: number; y: number }> }) => ({
+      project: { ...current, positions: { ctx1: { x: 64, y: 64 } } }, changed: true,
+    }));
+    render(<App />);
+    expect(screen.getByRole('button', { name: 'Arrange' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Compile' }));
+    await screen.findByLabelText('Compiled bytecode');
+    expect(executable()).toBe('executable');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Arrange' }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.positions.ctx1).toEqual({ x: 64, y: 64 }));
+    expect(screen.getByLabelText('Visual canvas')).toHaveAttribute('data-fit-view-request', '1');
+    expect(screen.getByLabelText('Compiled bytecode')).toBeInTheDocument();
+    expect(executable()).toBe('executable');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(PROJECT_STORAGE_KEY) ?? '{}').visual.positions.ctx1).toEqual({ x: 900, y: 700 }));
+    expect(screen.getByLabelText('Visual canvas')).toHaveAttribute('data-fit-view-request', '2');
+    expect(screen.getByLabelText('Compiled bytecode')).toBeInTheDocument();
+    expect(executable()).toBe('executable');
   });
 
   it('voids the undo slot when the graph is edited again after a deletion', async () => {
