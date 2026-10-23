@@ -33,6 +33,10 @@ export function OutputPanel(props: {
         : undefined}>
       {diagnosticLabel(error)}
     </Alert>}
+    {error && showGenerated && <>
+      <Typography variant="caption" color="text.secondary">GENERATED SOURCE</Typography>
+      <Box component="pre" className="code-output" aria-label="Generated source" title="Read-only source generated from the graph">{props.generated}</Box>
+    </>}
     {props.notice && <Alert severity="info" sx={{ mb: 2 }}>{props.notice}</Alert>}
     {output?.warnings?.map((warning, index) => <Alert key={`${warning.line ?? 0}:${warning.column ?? 0}:${index}`}
       severity="warning" sx={{ mb: 1, overflowWrap: 'anywhere' }}

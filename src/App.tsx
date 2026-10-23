@@ -59,7 +59,7 @@ function PaneTitle({ icon, children }: { icon: React.ReactNode; children: React.
 }
 
 export default function App() {
-  const stored = useRef(loadStoredProject() ?? DEFAULT_STORED).current;
+  const [stored] = useState(() => loadStoredProject() ?? DEFAULT_STORED);
   const [mode, setMode] = useState<AuthoringMode>(stored.mode);
   const [source, setSource] = useState(stored.codeSource ?? STARTER_SOURCE);
   const [project, setProject] = useState<VisualProject>(stored.visual);
@@ -380,7 +380,7 @@ export default function App() {
 
   async function compile() {
     setOutputOpen(true);
-    const currentRevision = revision.current;
+    const currentRevision = ++revision.current;
     const compiler = client.current ?? new CompilerClient();
     client.current = compiler;
     setBusy(true);
@@ -436,15 +436,19 @@ export default function App() {
 
   async function importArtifact(file: File) {
     setOutputOpen(true);
-    const currentRevision = revision.current;
+    const currentRevision = ++revision.current;
     const compiler = client.current ?? new CompilerClient();
     client.current = compiler;
+    compiler.cancel();
     setBusy(true);
     setError(null);
     setNotice('');
     setOutput(null);
+    setGenerated('');
     try {
-      const artifact = parseArtifact(await file.text());
+      const text = await file.text();
+      if (revision.current !== currentRevision) return;
+      const artifact = parseArtifact(text);
       const result = await compiler.inspect(artifact.program);
       if (revision.current === currentRevision) {
         setImportedArtifact(artifact);
@@ -490,7 +494,7 @@ export default function App() {
     actions={<ExecuteBlocks execution={execution} />}
     onCopy={copy}
     onDownload={download}
-    onErrorReveal={line => editorRef.current?.revealLine(line)}
+    onErrorReveal={mode === 'code' ? line => editorRef.current?.revealLine(line) : undefined}
   />;
 
   function insertContractFunction(contract: VisualProject['contracts'][number], fn: VisualProject['contracts'][number]['functions'][number]) {

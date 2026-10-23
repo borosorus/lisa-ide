@@ -29,7 +29,12 @@ type ReadStorage = Pick<Storage, 'getItem'>;
 type WriteStorage = Pick<Storage, 'setItem'>;
 
 function defaultStorage(): ReadStorage & WriteStorage | null {
-  return typeof window === 'undefined' ? null : window.localStorage;
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 export function saveStoredProject(

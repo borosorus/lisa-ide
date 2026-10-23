@@ -15,6 +15,8 @@ export interface ExecuteLisaTransaction {
   readonly to: string;
   readonly data: string;
   readonly value: bigint;
+  /** Bind wallet submission to the chain reviewed by the user. */
+  readonly chainId: bigint;
 }
 
 /** `executeLisa(bytes)` calldata; the program bytes are passed through unchanged. */
@@ -31,10 +33,18 @@ export function prepareExecuteLisaTransaction(input: {
   readonly account: string;
   readonly program: string;
   readonly status: ReadyStatus;
+  readonly chainId: string;
   readonly value?: bigint;
 }): ExecuteLisaTransaction {
   if (!isAddress(input.account)) throw new LisaError('WALLET_DISCONNECTED', 'Connected account is not a valid address');
+  let chainId: bigint;
+  try {
+    chainId = BigInt(input.chainId);
+  } catch {
+    throw new LisaError('WRONG_CHAIN', 'Connected chain is not a valid chain ID');
+  }
+  if (chainId <= 0n) throw new LisaError('WRONG_CHAIN', 'Connected chain is not a valid chain ID');
   const value = input.value ?? 0n;
   if (value < 0n) throw new LisaError('UNKNOWN', 'Transaction value must not be negative');
-  return { to: getAddress(input.account), data: encodeExecuteLisa(input.program), value };
+  return { to: getAddress(input.account), data: encodeExecuteLisa(input.program), value, chainId };
 }

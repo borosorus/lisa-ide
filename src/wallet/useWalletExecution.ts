@@ -278,7 +278,12 @@ export function useWalletExecution(
       if (!unchanged()) {
         throw new LisaError('WALLET_DISCONNECTED', 'Program, account, or chain changed while checking — nothing was sent.');
       }
-      const transaction = prepareExecuteLisaTransaction({ account: wanted.account, program: wanted.program, status });
+      const transaction = prepareExecuteLisaTransaction({
+        account: wanted.account,
+        program: wanted.program,
+        status,
+        chainId: wanted.chainId,
+      });
       const sent = await session.signer.sendTransaction(transaction);
       txHash = sent.hash ?? '';
       if (!mounted.current) return;

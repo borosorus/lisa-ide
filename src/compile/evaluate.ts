@@ -86,9 +86,9 @@ export function evaluateSource(source: string): ProgramBuilder {
         if (node.optional || node.arguments.some((arg: AstNode) => arg.type === 'SpreadElement'))
           return error(node, 'Optional calls and spread are not supported');
         const callee = node.callee as AstNode;
-        const args = node.arguments.map((arg: AstNode) => expression(arg, scope, depth + 1));
         try {
           if (callee.type === 'Identifier' && ['createProgram', 'encodeCall', 'rawCalldata'].includes(callee.name)) {
+            const args = node.arguments.map((arg: AstNode) => expression(arg, scope, depth + 1));
             const fn = helpers[callee.name] as (...args: any[]) => unknown;
             const result = fn(...args);
             // Whatever an encoded call is handed is emitted with it, so the
@@ -101,6 +101,10 @@ export function evaluateSource(source: string): ProgramBuilder {
           if (callee.type === 'MemberExpression' && !callee.computed && !callee.optional && callee.property.type === 'Identifier') {
             const receiver0 = expression(callee.object, scope, depth + 1);
             const method = callee.property.name as string;
+            // JavaScript evaluates the receiver before call arguments. Builder
+            // calls mutate their receiver, so preserving this order matters
+            // when fluent chains also contain calls in their arguments.
+            const args = node.arguments.map((arg: AstNode) => expression(arg, scope, depth + 1));
             // Value-like receivers (e.g. `(1n).add(2n)`) coerce exactly as builder
             // arguments do; booleans have no word representation.
             let receiver: unknown = receiver0;

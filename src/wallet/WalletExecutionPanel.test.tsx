@@ -200,7 +200,7 @@ describe('WalletExecutionPanel', () => {
     expect(await screen.findByText('Confirmed')).toBeInTheDocument();
     expect(screen.getByText('block 42')).toBeInTheDocument();
     expect(sendTransaction).toHaveBeenCalledOnce();
-    expect(sendTransaction).toHaveBeenCalledWith({ to: ACCOUNT, data: encodeExecuteLisa('0x6001'), value: 0n });
+    expect(sendTransaction).toHaveBeenCalledWith({ to: ACCOUNT, data: encodeExecuteLisa('0x6001'), value: 0n, chainId: 1n });
   });
 
   it('passes the program bytes through unchanged', async () => {
