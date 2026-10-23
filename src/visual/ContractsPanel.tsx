@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, Collapse, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, Paper, Stack, TextField, Typography,
+  IconButton, InputAdornment, Paper, Stack, TextField, Tooltip, Typography,
 } from '@mui/material';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
+import CodeRoundedIcon from '@mui/icons-material/CodeRounded';
+import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import ExpandMoreRoundedIcon from '@mui/icons-material/ExpandMoreRounded';
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded';
 import { isValidAddress, parseAbiJson } from './abi';
 import { isReadFunction, type ContractFunction, type ContractResource } from './model';
 import type { AuthoringMode } from './storage';
@@ -87,35 +91,47 @@ function ContractRow({ contract, expanded, onToggle, onPatch, onRemove, onAddFun
   mode: AuthoringMode;
   onInsertFunction: Props['onInsertFunction'];
 }) {
-  return <Box sx={{ mt: 1 }}>
-    <Stack direction="row" alignItems="center" spacing={0.5}>
-      <IconButton size="small" onClick={onToggle} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${contract.name}`} sx={{ p: 0.25 }}>
-        <ExpandMoreRoundedIcon fontSize="small"
-          sx={{ transform: expanded ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform .15s' }} />
-      </IconButton>
-      <Typography
-        variant="body2" sx={{ flexGrow: 1, cursor: 'pointer', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
-        onClick={onToggle} title={`${contract.name} · ${contract.address}`}
+  return <Paper variant="outlined" className={`contract-card${expanded ? ' contract-card-expanded' : ''}`}>
+    <Stack className="contract-card-heading" direction="row" alignItems="center" spacing={0.75}>
+      <Box
+        component="button"
+        type="button"
+        className="contract-identity"
+        onClick={onToggle}
+        title={`${contract.name} · ${contract.address}`}
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${contract.name}`}
+        aria-expanded={expanded}
       >
-        {contract.name}
-        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.75 }}>
-          {shortAddress(contract.address)} · {contract.functions.length} funcs
-        </Typography>
-      </Typography>
-      <IconButton size="small" aria-label={`Remove ${contract.name}`} onClick={() => onRemove(contract.id)} sx={{ p: 0.25 }}>
-        <CloseRoundedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-      </IconButton>
+        <ExpandMoreRoundedIcon className="contract-expand-icon" fontSize="small" />
+        <Box className="contract-identity-copy">
+          <Typography variant="body2" className="contract-name">{contract.name}</Typography>
+          <Stack className="contract-summary" direction="row" alignItems="center" spacing={0.75}>
+            <Typography component="span" variant="caption">{shortAddress(contract.address)}</Typography>
+            <span className="contract-summary-divider" aria-hidden="true" />
+            <Typography component="span" variant="caption">{contract.functions.length} functions</Typography>
+          </Stack>
+        </Box>
+      </Box>
+      <Tooltip title={`Remove ${contract.name}`}>
+        <IconButton size="small" aria-label={`Remove ${contract.name}`} onClick={() => onRemove(contract.id)} className="contract-remove-button">
+          <CloseRoundedIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
     </Stack>
     <Collapse in={expanded} unmountOnExit>
-      <AddressEditor contract={contract} onPatch={onPatch} />
-      <FunctionList contract={contract} mode={mode} onAddFunction={onAddFunction} onInsertFunction={onInsertFunction} />
+      <Box className="contract-details">
+        <AddressEditor contract={contract} onPatch={onPatch} />
+        <FunctionList contract={contract} mode={mode} onAddFunction={onAddFunction} onInsertFunction={onInsertFunction} />
+      </Box>
     </Collapse>
-  </Box>;
+  </Paper>;
 }
 
 function AddressEditor({ contract, onPatch }: { contract: ContractResource; onPatch: Props['onUpdateContract'] }) {
   const [text, setText] = useState(contract.address);
   const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   useEffect(() => setText(contract.address), [contract.address]);
 
   function commit() {
@@ -130,6 +146,18 @@ function AddressEditor({ contract, onPatch }: { contract: ContractResource; onPa
     onPatch(contract.id, { address: trimmed });
   }
 
+  async function copyAddress() {
+    try {
+      await navigator.clipboard.writeText(contract.address);
+      setCopyFailed(false);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+      setCopyFailed(true);
+    }
+  }
+
   return <TextField
     size="small"
     value={text}
@@ -139,9 +167,24 @@ function AddressEditor({ contract, onPatch }: { contract: ContractResource; onPa
     error={error.length > 0}
     helperText={error || 'Contract address'}
     fullWidth
+    className="contract-address-field"
     sx={{ my: 0.75 }}
     slotProps={{
-      htmlInput: { 'aria-label': `Address for ${contract.name}`, style: { fontFamily: 'monospace', wordBreak: 'break-all' } },
+      input: {
+        endAdornment: <InputAdornment position="end">
+          <Tooltip title={copied ? 'Copied' : copyFailed ? 'Clipboard unavailable; select address to copy' : 'Copy address'}>
+            <IconButton
+              size="small"
+              onClick={copyAddress}
+              aria-label={copied ? `Copied address for ${contract.name}` : copyFailed ? `Copy unavailable for ${contract.name}` : `Copy address for ${contract.name}`}
+              edge="end"
+            >
+              {copied ? <CheckRoundedIcon fontSize="small" /> : <ContentCopyRoundedIcon fontSize="small" />}
+            </IconButton>
+          </Tooltip>
+        </InputAdornment>,
+      },
+      htmlInput: { 'aria-label': `Address for ${contract.name}`, style: { fontFamily: 'monospace', fontSize: '11px' } },
     }}
   />;
 }
@@ -166,9 +209,16 @@ function FunctionList({ contract, mode, onAddFunction, onInsertFunction }: {
 
   return <Box>
     <TextField
-      size="small" placeholder="Search functions..." fullWidth sx={{ my: 0.5 }}
-      value={query} onChange={e => setQuery(e.target.value)}
-      inputProps={{ 'aria-label': `Search functions in ${contract.name}` }}
+      size="small"
+      placeholder="Filter ABI functions"
+      fullWidth
+      className="contracts-search"
+      value={query}
+      onChange={e => setQuery(e.target.value)}
+      slotProps={{
+        input: { startAdornment: <InputAdornment position="start"><SearchRoundedIcon fontSize="small" /></InputAdornment> },
+        htmlInput: { 'aria-label': `Search functions in ${contract.name}` },
+      }}
     />
     <FunctionGroup label="Read" functions={matches.reads} contract={contract} mode={mode} onAddFunction={onAddFunction} onInsertFunction={onInsertFunction} />
     <FunctionGroup label="Write" functions={matches.writes} contract={contract} mode={mode} onAddFunction={onAddFunction} onInsertFunction={onInsertFunction} />
@@ -188,11 +238,15 @@ function FunctionGroup({ label, functions, contract, mode, onAddFunction, onInse
 }) {
   if (functions.length === 0) return null;
   return <Box sx={{ mt: 0.5 }}>
-    <Typography variant="caption" color="text.secondary">{label}</Typography>
+    <Stack className="function-group-heading" direction="row" alignItems="center" justifyContent="space-between">
+      <Typography variant="caption">{label} functions</Typography>
+      <Typography component="span" variant="caption">{functions.length}</Typography>
+    </Stack>
     {functions.map(fn => (
-      <Paper
+      <Button
         key={fn.signature}
         variant="outlined"
+        fullWidth
         className="function-item"
         draggable={mode === 'visual'}
         onDragStart={event => {
@@ -202,17 +256,18 @@ function FunctionGroup({ label, functions, contract, mode, onAddFunction, onInse
         }}
         onClick={() => mode === 'visual' ? onAddFunction(contract.id, fn.signature) : onInsertFunction(contract, fn)}
         title={mode === 'visual' ? `Click to add to the canvas, or drag onto it: ${fn.signature}` : `Insert ${isReadFunction(fn) ? 'staticCall' : 'call'} snippet: ${fn.signature}`}
-        role="button"
         aria-label={fn.signature}
       >
         {/* Canonical signature, not the bare name: overloads must not look
             identical. Truncated on screen; full text in the tooltip. */}
-        <Box component="span" sx={{
-          display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
+        <Box component="span" className="function-signature">
           {fn.signature}
         </Box>
-      </Paper>
+        <Box component="span" className="function-item-action" aria-hidden="true">
+          {mode === 'visual' ? <AddRoundedIcon fontSize="small" /> : <CodeRoundedIcon fontSize="small" />}
+          {mode === 'visual' ? 'Add' : 'Insert'}
+        </Box>
+      </Button>
     ))}
   </Box>;
 }
