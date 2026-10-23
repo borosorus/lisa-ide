@@ -105,6 +105,16 @@ npm run typecheck
 npm run build
 ```
 
+### GitHub Pages
+
+The `build/github-pages` branch is configured to test and build the app, then publish it through
+GitHub Actions at `https://borosorus.github.io/lisa-ide/`. In the repository's **Settings → Pages**,
+set the source to **GitHub Actions**. Pushes to that branch deploy automatically; the workflow can
+also be started from the Actions tab after this workflow is present on the default branch. If the
+`github-pages` environment restricts deployments, allow the `build/github-pages` branch. Its build
+uses the `/lisa-ide/` base path required for a project site, while local development keeps Vite's
+default `/` path.
+
 ## Authoring source
 
 Write a JavaScript-compatible subset using pre-bound LISA helpers. CodeMirror provides syntax highlighting and completions; compilation runs in a Web Worker. The current source is kept locally in the browser. The Source header includes ready-to-adapt code examples, including mainnet templates for a Curve quote and swap, Lido staking, and Aave supply. These protocol examples assume the account is delegated on Ethereum mainnet and has the required assets. The Aave program grants its exact USDC allowance immediately before supplying. Review each address, amount, and minimum output before execution. The Canvas header includes loadable visual graphs for token checks, try-call fallbacks, native payments, hashing, and raw calldata.

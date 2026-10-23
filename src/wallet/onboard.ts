@@ -23,9 +23,10 @@ const chains: NonNullable<InitOptions['chains']> = [
 ];
 
 const defaultChainHex = `0x${BigInt(DEFAULT_CHAIN_ID).toString(16)}`;
+const chainHex = (id: string | number) => `0x${BigInt(id).toString(16)}`;
 export const SUPPORTED_CHAINS: InitOptions['chains'] = [
-  ...chains.filter(chain => chain.id.toLowerCase() === defaultChainHex),
-  ...chains.filter(chain => chain.id.toLowerCase() !== defaultChainHex),
+  ...chains.filter(chain => chainHex(chain.id) === defaultChainHex),
+  ...chains.filter(chain => chainHex(chain.id) !== defaultChainHex),
 ];
 
 const injected = injectedModule();
