@@ -1,5 +1,5 @@
 import type { DeploymentConfig, LisaAccountStatus } from '../lisa-account/types';
-import { parseSafeAddress, type SafeExecutionStatus } from './safe';
+import { parseSafeAddress, type SafeAddress, type SafeExecutionStatus } from './safe';
 
 /**
  * Pure derivation of every execution-surface state. The panel only
@@ -13,12 +13,6 @@ export type SessionSnapshot = {
   readonly chainId: string | null;
   readonly message?: string | null;
 };
-
-/**
- * Where a program runs: through the connected account's own EIP-7702 delegation,
- * or through a single-owner Safe that delegatecalls the runtime for it.
- */
-export type ExecutionMode = 'eoa' | 'safe';
 
 /** An inspection result is only usable while account *and* chain are unchanged (§14). */
 export type Inspection = {
@@ -52,9 +46,11 @@ export type ExecutionGate =
   | { kind: 'rpc-error'; reason: string }
   | { kind: 'no-program' }
   | { kind: 'ready'; account: string; runtime: string }
-  // Safe mode: the address is entered by hand, so "nothing typed yet" and
-  // "not an address" are separate, actionable states (§2).
-  | { kind: 'safe-address-missing' }
+  // Safe mode: the target is an entry the user chose in the Safe accounts
+  // dialog. The active entry is always a parsed address, so there is no
+  // "nothing typed yet" state; an entry pinned to another chain is its own
+  // refusal because the same address is not the same account there (§2).
+  | { kind: 'safe-other-chain'; safe: string; expected: string; actual: string }
   | { kind: 'safe-address-invalid' }
   | { kind: 'safe-no-code'; safe: string }
   | { kind: 'safe-not-a-safe'; safe: string; reason: string }
@@ -105,9 +101,8 @@ export interface GateInput {
   readonly inspection: Inspection | null;
   readonly inspectionError: string | null;
   readonly hasProgram: boolean;
-  readonly mode?: ExecutionMode;
-  /** The Safe address as typed, not as parsed: an invalid entry is its own state. */
-  readonly safeAddress?: string;
+  /** The Safe the user chose to execute through; null means the connected account. */
+  readonly safe?: SafeAddress | null;
   readonly safeInspection?: SafeInspection | null;
   readonly safeInspectionError?: string | null;
 }
@@ -117,6 +112,13 @@ export function deriveGate(input: GateInput): ExecutionGate {
   if (session.status === 'disconnected') return { kind: 'wallet-disconnected' };
   if (session.status === 'loading') return { kind: 'wallet-connecting' };
   if (session.status === 'error') return { kind: 'wallet-error', reason: session.message ?? 'Wallet connection failed.' };
+  const safe = input.safe ?? null;
+  // The chosen Safe is pinned to the chain it was verified on, and that pin comes
+  // before any deployment question: on another network the entry is not that
+  // contract, so nothing about the deployment can make it one (§2).
+  if (safe !== null && session.chainId !== null && session.chainId !== safe.chainId) {
+    return { kind: 'safe-other-chain', safe: safe.address, expected: safe.chainId, actual: session.chainId };
+  }
   if (config.kind === 'unconfigured') return { kind: 'unconfigured' };
   if (config.kind === 'invalid') return { kind: 'invalid-config', reason: config.reason };
   // Nothing on another chain belongs to this deployment, so nothing here may be
@@ -124,7 +126,7 @@ export function deriveGate(input: GateInput): ExecutionGate {
   if (session.chainId !== null && session.chainId !== config.chainId) {
     return { kind: 'wrong-chain', expected: config.chainId, actual: session.chainId };
   }
-  return (input.mode ?? 'eoa') === 'safe' ? safeGate(input) : eoaGate(input);
+  return safe === null ? eoaGate(input) : safeGate(input);
 }
 
 function eoaGate(input: GateInput): ExecutionGate {
@@ -164,10 +166,11 @@ function eoaGate(input: GateInput): ExecutionGate {
  */
 function safeGate(input: GateInput): ExecutionGate {
   const { session, hasProgram } = input;
+  const entry = input.safe!;
+  // `deriveGate` already refused a Safe pinned to another chain, so the entry and
+  // the session chain are the same network by the time this runs.
   if (session.chainId === null || session.account === null) return { kind: 'inspecting' };
-  const typed = (input.safeAddress ?? '').trim();
-  if (typed === '') return { kind: 'safe-address-missing' };
-  const safe = parseSafeAddress(typed);
+  const safe = parseSafeAddress(entry.address);
   if (safe === null) return { kind: 'safe-address-invalid' };
 
   const current = safeInspectionIsCurrent(input.safeInspection ?? null, safe, session.account, session.chainId)
@@ -221,8 +224,8 @@ export function describeGate(gate: ExecutionGate): string {
     // ours to run (§4). The alert gives the reason; the chip stays true either way.
     case 'no-program': return 'No executable program';
     case 'ready': return 'Ready';
-    case 'safe-address-missing': return 'Add a Safe address';
-    case 'safe-address-invalid': return 'Safe address is not valid';
+    case 'safe-other-chain': return 'Safe saved on another network';
+    case 'safe-address-invalid': return 'Saved Safe address is not valid';
     case 'safe-no-code': return 'Safe address has no code';
     case 'safe-not-a-safe': return 'Address is not a Safe';
     case 'safe-unsupported-version': return 'Unsupported Safe version';

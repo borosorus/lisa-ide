@@ -84,6 +84,16 @@ export interface SafeTransaction {
   readonly chainId: bigint;
 }
 
+/**
+ * One Safe on one chain. The chain is part of the identity: the same address is
+ * a different account on another network, and a Safe digest only verifies on the
+ * chain it was built for (§2, §3).
+ */
+export interface SafeAddress {
+  readonly address: string;
+  readonly chainId: string;
+}
+
 /** The Safe address as typed, or null when it is not a usable 20-byte address. */
 export function parseSafeAddress(value: string): string | null {
   const text = value.trim();

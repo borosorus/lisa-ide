@@ -95,9 +95,10 @@ is not implemented: the account must already be delegated to the configured Lisa
 
 ### Executing through a single-owner Safe
 
-The strip's **Execute through** switch adds a second target: a Safe that runs the program for you. No
-delegation, module, or deployment is involved, and the connected account does not need any delegation
-at all — a 1-of-1 Safe can execute a LISA program in **one ordinary transaction**:
+The strip's **Execute through** button opens **Safe accounts**: a saved list of Safe addresses, each
+pinned to the chain it was verified on, plus the one you are currently using. No delegation, module, or
+deployment is involved, and the connected account does not need any delegation at all — a 1-of-1 Safe
+can execute a LISA program in **one ordinary transaction**:
 
 ```
 execTransaction(
@@ -114,11 +115,19 @@ execTransaction(
 The Safe delegatecalls the runtime itself, so the runtime executes the program inside the Safe's
 context and everything finishes before that transaction returns. Because the threshold is 1, sending
 it *is* executing it: there is nothing to propose to the Safe Transaction Service and no second
-approval to wait for. The flow is **Safe address → review → sign the typed data → send the transaction
+approval to wait for. The flow is **choose a Safe → review → sign the typed data → send the transaction
 to the Safe → receipt**, and your wallet will ask twice (once to sign, once to broadcast).
 
-Paste the Safe address into the strip; it is remembered per chain in `localStorage`. Only these Safes
-are accepted, and anything else fails closed with its own reason:
+**Safe accounts** keeps its addresses in `localStorage`. Adding one verifies it on chain first and only
+remembers it once it verifies, so the book never holds a Safe you could not execute through on that
+chain. **Use** switches to another saved Safe, **Switch network** moves the wallet to a Safe saved on a
+different chain before verifying it there, **Remove** forgets an entry (and stops using it), and **Stop
+using this Safe** goes back to the connected account without forgetting the address. A reload lands on
+the same target you left, and if the wallet is later on another chain the strip says so instead of
+reading a different contract at the same address. An address saved by an earlier build of this branch
+under a per-chain key is folded into the book on first read.
+
+Only these Safes are accepted, and anything else fails closed with its own reason:
 
 - **Not a 1-of-1 Safe.** A different threshold cannot be satisfied by one wallet, so it is refused
   rather than half-executed.

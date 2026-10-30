@@ -150,6 +150,7 @@ describe('deriveGate in Safe mode', () => {
 
   function safeGate(status: SafeInspection['status'] | null, overrides: {
     safeAddress?: string;
+    chainId?: string;
     error?: string | null;
     hasProgram?: boolean;
     session?: Partial<SessionSnapshot>;
@@ -161,8 +162,7 @@ describe('deriveGate in Safe mode', () => {
       inspection: null,
       inspectionError: null,
       hasProgram: overrides.hasProgram ?? true,
-      mode: 'safe',
-      safeAddress: overrides.safeAddress ?? SAFE,
+      safe: { address: overrides.safeAddress ?? SAFE, chainId: overrides.chainId ?? '1' },
       safeInspection: status === null ? null : {
         safe: getAddress(SAFE), owner: overrides.owner ?? ACCOUNT, chainId: '1', status,
       },
@@ -170,11 +170,14 @@ describe('deriveGate in Safe mode', () => {
     });
   }
 
-  it('asks for an address before it reads anything', () => {
-    const missing = safeGate(null, { safeAddress: '   ' });
-    expect(missing).toEqual({ kind: 'safe-address-missing' });
-    expect(canExecute(missing)).toBe(false);
-    expect(describeGate(missing)).toBe('Add a Safe address');
+  it('refuses a saved Safe that belongs to another network before reading anything (§2)', () => {
+    const otherChain = safeGate(READY_SAFE, { chainId: '11155111' });
+    expect(otherChain).toEqual({ kind: 'safe-other-chain', safe: SAFE, expected: '11155111', actual: '1' });
+    expect(canExecute(otherChain)).toBe(false);
+    expect(describeGate(otherChain)).toBe('Safe saved on another network');
+  });
+
+  it('only refuses an address that no longer parses, not an empty one', () => {
     expect(safeGate(null, { safeAddress: '0x1234' })).toEqual({ kind: 'safe-address-invalid' });
   });
 
@@ -217,15 +220,14 @@ describe('deriveGate in Safe mode', () => {
     }
   });
 
-  it('keeps the account path untouched when the mode is not safe', () => {
+  it('keeps the account path untouched when no Safe is chosen', () => {
     const eoa = deriveGate({
       session: READY,
       config: CONFIG,
       inspection: { account: ACCOUNT, chainId: '1', status: { kind: 'undelegated' } },
       inspectionError: null,
       hasProgram: true,
-      mode: 'eoa',
-      safeAddress: SAFE,
+      safe: null,
       safeInspection: { safe: getAddress(SAFE), owner: ACCOUNT, chainId: '1', status: READY_SAFE },
     });
     expect(eoa).toEqual({ kind: 'undelegated' });

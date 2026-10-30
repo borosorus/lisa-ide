@@ -7,17 +7,21 @@ import { LisaError, type DeploymentConfig } from '../lisa-account/types';
 import { deploymentForChain, deploymentLabel } from './deployment';
 import { broadcastHash, normalizeError } from './errors';
 import {
-  canExecute, deriveGate,
+  canExecute, deriveGate, describeGate,
   IDLE,
   normalizeChainId,
-  type ExecutionGate, type ExecutionMode, type Inspection, type SafeInspection,
+  type ExecutionGate, type Inspection, type SafeInspection,
   type SessionSnapshot, type TransactionPhase,
 } from './executionState';
 import {
   buildSafeTx, hashSafeTx, inspectSafeExecution, normalizeSafeSignature, parseSafeAddress,
-  prepareSafeExecutionTransaction, readSafeNonce, readSafeTransactionHash, recoverSafeSigner, safeTypedData,
+  prepareSafeExecutionTransaction, readSafeNonce, readSafeTransactionHash, recoverSafeSigner,
+  safeTypedData, type SafeAddress,
 } from './safe';
-import { loadSafeAddress, saveSafeAddress } from './safeSettings';
+import {
+  addSafeAddress, readActiveSafe, readSavedSafes, safeAddressKey, sameSafeAddress,
+  writeActiveSafe, writeSavedSafes, withoutSafeAddress,
+} from './safeSettings';
 import { useWalletSession, type WalletSession } from './session';
 
 /**
@@ -117,6 +121,33 @@ function settle(
     : { kind: 'failed', txHash: state.txHash === '' ? null : state.txHash, message: error.message });
 }
 
+/**
+ * The chain the wallet is on right now. `BrowserProvider.getNetwork()` answers
+ * from a cached network that only refreshes when the wallet's `chainChanged`
+ * event arrives, so immediately after a switch it can still name the chain that
+ * was left. The EIP-1193 request is answered from live state; the cached network
+ * is the fallback for a provider that does not expose it (§2).
+ */
+async function liveChainId(provider: JsonRpcSigner['provider']): Promise<string | null> {
+  const request = (provider as unknown as {
+    send?: (method: string, params: unknown[]) => Promise<unknown>;
+  }).send;
+  if (typeof request === 'function') {
+    try {
+      const answer = await request.call(provider, 'eth_chainId', []);
+      const chainId = normalizeChainId(typeof answer === 'string' ? answer : String(answer));
+      if (chainId !== null) return chainId;
+    } catch {
+      // Fall through: a cached answer is still better than none.
+    }
+  }
+  try {
+    return normalizeChainId((await provider.getNetwork()).chainId);
+  } catch {
+    return null;
+  }
+}
+
 export interface GateAlert {
   readonly severity: 'error' | 'info' | 'success';
   readonly text: string;
@@ -133,12 +164,24 @@ export interface ExecutionController {
   readonly alert: GateAlert | null;
   /** Where the reviewed transaction would run; null outside a review. */
   readonly reviewTarget: ReviewTarget | null;
-  readonly mode: ExecutionMode;
-  /** Switch between the connected account's delegation and a single-owner Safe. */
-  setMode(mode: ExecutionMode): void;
-  /** The Safe address as typed. Remembered per chain once it parses. */
-  readonly safeAddress: string;
-  setSafeAddress(address: string): void;
+  /**
+   * The Safe execution runs through; null means the connected account's own
+   * EIP-7702 delegation. An entry is pinned to its chain, so it is chosen on the
+   * network it was verified on (§2, §5).
+   */
+  readonly activeSafe: SafeAddress | null;
+  /** Every Safe address saved in this browser, across chains. */
+  readonly savedSafes: readonly SafeAddress[];
+  /**
+   * Make a Safe the execution target and remember it. The Safe is verified on
+   * chain first — switching the wallet to its network when it is not the current
+   * one — and the promise rejects with a readable reason when it is not usable.
+   */
+  selectSafe(address: string, chainId: string): Promise<void>;
+  /** Go back to executing through the connected account. */
+  clearSafe(): void;
+  /** Forget a saved Safe; also stops using it when it is the active one. */
+  removeSafe(address: string, chainId: string): void;
   /** Begin the explicit review; nothing is sent by this click. */
   review(): void;
   /** The one path to a broadcast, after a reviewed intent still matches live state. */
@@ -153,7 +196,8 @@ export interface ExecutionController {
   dismiss(): void;
   /** True while the execution dialog should be on screen. */
   readonly dialogOpen: boolean;
-  requestSwitch(): Promise<void>;
+  /** Ask the wallet to switch networks, to `chainId` or to the configured one. */
+  requestSwitch(chainId?: string): Promise<void>;
   readonly switching: boolean;
   readonly switchMessage: string | null;
 }
@@ -174,8 +218,9 @@ function gateAlert(gate: ExecutionGate): GateAlert | null {
     case 'rpc-error': return { severity: 'error', text: gate.reason };
     // One message covers both ways there is no executable program (§4).
     case 'no-program': return { severity: 'info', text: 'No current compiled program. Compile from the editor to enable execution; an imported artifact is inspected, never executed.' };
-    case 'safe-address-missing': return { severity: 'info', text: 'Paste the address of a single-owner Safe to execute through it, or switch back to the connected account’s own delegation.' };
-    case 'safe-address-invalid': return { severity: 'error', text: 'That is not a 20-byte address. Paste the Safe address exactly as the Safe app shows it.' };
+    // Switching networks does not move the Safe, so the refusal names both chains.
+    case 'safe-other-chain': return { severity: 'info', text: `The active Safe is saved on chain ${gate.expected}, but the wallet is on chain ${gate.actual}. Switch the wallet to chain ${gate.expected} to execute through it, or choose another Safe.` };
+    case 'safe-address-invalid': return { severity: 'error', text: 'The saved Safe address is not a 20-byte address, so it is not used. Remove it and add the Safe again.' };
     case 'safe-no-code': return { severity: 'error', text: `No contract is deployed at ${gate.safe} on this chain. Check the address and the connected network.` };
     case 'safe-not-a-safe': return { severity: 'error', text: `${gate.safe} does not answer as a Safe: ${gate.reason}` };
     case 'safe-unsupported-version': return { severity: 'error', text: `Safe ${gate.safe} reports version ${gate.version}. This app signs Safe transactions only for 1.3.0 and 1.4.1, whose hashing it can reproduce exactly.` };
@@ -200,8 +245,11 @@ export function useWalletExecution(
   const [inspectionError, setInspectionError] = useState<string | null>(null);
   const [safeInspection, setSafeInspection] = useState<SafeInspection | null>(null);
   const [safeInspectionError, setSafeInspectionError] = useState<string | null>(null);
-  const [mode, setMode] = useState<ExecutionMode>('eoa');
-  const [safeAddress, setSafeAddressState] = useState<string>('');
+  // The address book and the active entry come from storage, so a reload lands on
+  // the same target the user left rather than on a blank field (§5).
+  const [savedSafes, setSavedSafes] = useState<SafeAddress[]>(() => readSavedSafes());
+  const [activeSafe, setActiveSafe] = useState<SafeAddress | null>(() => readActiveSafe());
+  const activeSafeKey = activeSafe === null ? null : safeAddressKey(activeSafe);
   // A settled transaction changed state on chain — the Safe's nonce in
   // particular — so the next review must not be built on the inspection taken
   // before it. Bumped once per settlement, never on a failed send that never
@@ -238,25 +286,15 @@ export function useWalletExecution(
   }>({ program: output?.program ?? null, account: session.account, chainId: session.chainId, status: session.status });
   now.current = { program: output?.program ?? null, account: session.account, chainId: session.chainId, status: session.status };
 
-  // A Safe lives on one chain; remembering it per chain is the only way a long
-  // address survives a reload without being copied on every visit (§5).
-  useEffect(() => {
-    setSafeAddressState(loadSafeAddress(session.chainId) ?? '');
-  }, [session.chainId]);
-
-  const setSafeAddress = useCallback((value: string) => {
-    setSafeAddressState(value);
-    saveSafeAddress(session.chainId, value);
-  }, [session.chainId]);
-
-  const parsedSafe = useMemo(() => parseSafeAddress(safeAddress), [safeAddress]);
+  // A Safe lives on one chain, and choosing it is what remembers it, so there is
+  // no per-render load here: the active entry is either stored or absent (§5).
 
   const snapshot = useMemo<SessionSnapshot>(() => ({
     status: session.status, account: session.account, chainId: session.chainId, message: session.message,
   }), [session.status, session.account, session.chainId, session.message]);
   const gate = deriveGate({
     session: snapshot, config, inspection, inspectionError, hasProgram: output !== null,
-    mode, safeAddress, safeInspection, safeInspectionError,
+    safe: activeSafe, safeInspection, safeInspectionError,
   });
 
   // Inspect the account the session is on now; a result for any other
@@ -286,20 +324,25 @@ export function useWalletExecution(
   useEffect(() => {
     setSafeInspection(null);
     setSafeInspectionError(null);
-    if (mode !== 'safe' || parsedSafe === null) return;
+    if (activeSafe === null) return;
     if (reader === null || account === null || chainId === null || config.kind !== 'configured') return;
     if (chainId !== config.chainId) return;
+    // The entry is pinned to its chain: on another network it is a different
+    // account, and the gate refuses it rather than reading something else (§2).
+    if (chainId !== activeSafe.chainId) return;
+    const safe = parseSafeAddress(activeSafe.address);
+    if (safe === null) return;
     let live = true;
     void (async () => {
       try {
-        const status = await inspectSafeExecution(reader, parsedSafe, account, config);
-        if (live && mounted.current) setSafeInspection({ safe: parsedSafe, owner: account, chainId, status });
+        const status = await inspectSafeExecution(reader, safe, account, config);
+        if (live && mounted.current) setSafeInspection({ safe, owner: account, chainId, status });
       } catch (cause) {
         if (live && mounted.current) setSafeInspectionError(normalizeError(cause).message);
       }
     })();
     return () => { live = false };
-  }, [mode, parsedSafe, reader, account, chainId, config, inspectionTick]);
+  }, [activeSafeKey, reader, account, chainId, config, inspectionTick]);
 
   // A transaction that settles is a state change on chain, and the Safe's nonce
   // moves with it. So does a refusal for a moved nonce: the inspection that
@@ -324,11 +367,11 @@ export function useWalletExecution(
     setPhase(current => (sendInFlight.current ? current : IDLE));
     intent.current = null;
     setReviewTarget(null);
-  }, [account, chainId, mode, safeAddress]);
+  }, [account, chainId, activeSafeKey]);
 
   const review = useCallback(() => {
     if (output === null || session.account === null || session.chainId === null) return;
-    if (mode === 'safe') {
+    if (activeSafe !== null) {
       // A Safe review carries a nonce, which only a ready inspection has.
       if (gate.kind !== 'ready-safe') return;
       intent.current = {
@@ -342,7 +385,7 @@ export function useWalletExecution(
     }
     setDialogRequested(true);
     setPhase({ kind: 'review' });
-  }, [output, session.account, session.chainId, mode, gate]);
+  }, [output, session.account, session.chainId, activeSafe, gate]);
 
   // Closing the window is purely visual once there is a live transaction to
   // track: the receipt keeps updating in the controller either way (§8).
@@ -351,18 +394,99 @@ export function useWalletExecution(
   // Switching is offered, never performed: the wallet asks, the user answers (§2).
   const [switching, setSwitching] = useState(false);
   const [switchMessage, setSwitchMessage] = useState<string | null>(null);
-  const requestSwitch = useCallback(async () => {
-    if (config.kind !== 'configured') return;
+  const requestSwitch = useCallback(async (chainId?: string) => {
+    // The configured chain by default; a Safe pinned to another chain passes its
+    // own, because switching networks is how that Safe becomes reachable.
+    const target = chainId ?? (config.kind === 'configured' ? config.chainId : null);
+    if (target === null) return;
     setSwitching(true);
     setSwitchMessage(null);
     try {
-      await session.switchChain(config.chainId);
+      await session.switchChain(target);
     } catch (cause) {
       setSwitchMessage(normalizeError(cause).message);
     } finally {
       setSwitching(false);
     }
   }, [config, session]);
+
+  /**
+   * Choosing a Safe is a claim about a contract, so it is verified once, here,
+   * before it becomes the target: switch to the entry's chain if the wallet is
+   * elsewhere, then read the Safe exactly as execution will (§14). The refusal is
+   * the gate's own sentence, so the dialog and the strip cannot disagree.
+   */
+  const selectSafe = useCallback(async (addressInput: string, chainIdInput: string) => {
+    const address = parseSafeAddress(addressInput);
+    if (address === null) throw new LisaError('INVALID_CONFIG', 'Enter a valid 20-byte Safe address.');
+    const chainId = normalizeChainId(chainIdInput);
+    if (chainId === null) throw new LisaError('INVALID_CONFIG', `"${chainIdInput}" is not a chain id.`);
+    if (session.account === null || session.reader === null || session.signer === null) {
+      throw new LisaError('WALLET_DISCONNECTED', 'Connect the owner wallet before choosing a Safe.');
+    }
+    // A live broadcast owns the target: retargeting under it would make the strip
+    // describe a transaction it is not sending.
+    if (sendInFlight.current) {
+      throw new LisaError('SAFE_NOT_READY', 'A transaction is being sent — choose a Safe after it settles.');
+    }
+    if (session.chainId !== chainId) {
+      await session.switchChain(chainId);
+      // A wallet can answer a switch request without switching, and the chain
+      // that is live now is the only one this Safe can be verified on (§2).
+      const live = await liveChainId(session.signer.provider);
+      if (live !== chainId) {
+        throw new LisaError('WRONG_CHAIN', `The wallet is still on chain ${live ?? 'unknown'}, not ${chainId} — the Safe was not chosen.`);
+      }
+    }
+    const target: SafeAddress = { address, chainId };
+    const targetConfig = configOverride ?? deploymentForChain(chainId);
+    const status = await inspectSafeExecution(session.reader, address, session.account, targetConfig);
+    // A candidate gate, not a bespoke check: verified has to mean "would execute".
+    const candidate = deriveGate({
+      session: { status: 'ready', account: session.account, chainId, message: null },
+      config: targetConfig,
+      inspection: null,
+      inspectionError: null,
+      hasProgram: true,
+      safe: target,
+      safeInspection: { safe: address, owner: session.account, chainId, status },
+      safeInspectionError: null,
+    });
+    if (candidate.kind !== 'ready-safe') {
+      throw new LisaError('SAFE_NOT_READY', gateAlert(candidate)?.text ?? `Safe is not ready: ${describeGate(candidate)}.`);
+    }
+    const remembered = addSafeAddress(savedSafes, target);
+    if (remembered.length !== savedSafes.length) {
+      writeSavedSafes(remembered);
+      setSavedSafes(remembered);
+    }
+    if (activeSafeKey !== safeAddressKey(target)) {
+      writeActiveSafe(target);
+      setActiveSafe(target);
+    }
+  }, [activeSafeKey, configOverride, savedSafes, session.account, session.chainId, session.reader, session.signer, session.switchChain]);
+
+  /** Back to the connected account; the saved entry stays in the book. */
+  const clearSafe = useCallback(() => {
+    writeActiveSafe(null);
+    setActiveSafe(null);
+  }, []);
+
+  const removeSafe = useCallback((addressInput: string, chainIdInput: string) => {
+    const address = parseSafeAddress(addressInput);
+    const chainId = normalizeChainId(chainIdInput);
+    if (address === null || chainId === null) return;
+    const entry: SafeAddress = { address, chainId };
+    const remaining = withoutSafeAddress(savedSafes, entry);
+    writeSavedSafes(remaining);
+    setSavedSafes(remaining);
+    // Removing the entry the user is executing through cannot leave it active:
+    // the next render would otherwise execute through a Safe no longer listed.
+    if (activeSafe !== null && sameSafeAddress(activeSafe, entry)) {
+      writeActiveSafe(null);
+      setActiveSafe(null);
+    }
+  }, [activeSafe, savedSafes]);
 
   const send = useCallback(async () => {
     const wanted = intent.current;
@@ -383,9 +507,9 @@ export function useWalletExecution(
     }
     // The target is a claim too: a review of the account cannot become a Safe
     // transaction (or one Safe another) after the fact.
-    if (wanted.kind === 'safe'
-      ? mode !== 'safe' || parseSafeAddress(safeAddress)?.toLowerCase() !== wanted.safe.toLowerCase()
-      : mode !== 'eoa') {
+    const liveTarget = activeSafe === null ? 'eoa' : safeAddressKey(activeSafe);
+    const wantedTarget = wanted.kind === 'eoa' ? 'eoa' : safeAddressKey({ address: wanted.safe, chainId: wanted.chainId });
+    if (wantedTarget !== liveTarget) {
       setPhase({ kind: 'failed', txHash: null, message: 'Execution target changed after review — nothing was sent.' });
       return;
     }
@@ -406,9 +530,9 @@ export function useWalletExecution(
     // to match the value the review was built on and the one the deployment
     // names. `stage` only words the message; the claim is the same each time.
     const walletUnchanged = async (stage: string) => {
-      const [accounts, network] = await Promise.all([
+      const [accounts, liveChain] = await Promise.all([
         session.walletAccounts(),
-        session.signer!.provider.getNetwork(),
+        liveChainId(session.signer!.provider),
       ]);
       if (accounts.length === 0) {
         throw new LisaError('WALLET_DISCONNECTED', 'Wallet reports no connected account — nothing was sent.');
@@ -416,7 +540,6 @@ export function useWalletExecution(
       if (!accounts.some(a => a.toLowerCase() === expectedAccount.toLowerCase())) {
         throw new LisaError('WALLET_DISCONNECTED', `Connected account changed ${stage} — nothing was sent.`);
       }
-      const liveChain = normalizeChainId(network.chainId);
       if (liveChain !== wanted.chainId || liveChain !== config.chainId) {
         throw new LisaError('WRONG_CHAIN', `Connected chain changed ${stage} — nothing was sent.`);
       }
@@ -523,7 +646,7 @@ export function useWalletExecution(
       // changes may resume clearing the phase from here on.
       sendInFlight.current = false;
     }
-  }, [config, mode, safeAddress, session.signer, session.reader, session.walletAccounts]);
+  }, [config, activeSafe, session.signer, session.reader, session.walletAccounts]);
 
   const cancelReview = useCallback(() => {
     intent.current = null;
@@ -537,8 +660,7 @@ export function useWalletExecution(
     canExecute: canExecute(gate),
     alert: gateAlert(gate),
     reviewTarget,
-    mode, setMode,
-    safeAddress, setSafeAddress,
+    activeSafe, savedSafes, selectSafe, clearSafe, removeSafe,
     // A requested window with nothing left to watch is no window at all.
     dialogOpen: dialogRequested && phase.kind !== 'idle',
     review, send, cancelReview, dismiss, requestSwitch, switching, switchMessage,

@@ -17,6 +17,9 @@ import { WalletSessionContext, DISCONNECTED_SESSION, type WalletSession } from '
  * Safe execution, end to end through the real controller: one owner key signs a
  * Safe transaction, the Safe delegatecalls the LISA runtime with the compiled
  * program, and nothing touches a chain until the review is confirmed.
+ *
+ * Choosing the Safe goes through the address-book dialog, so the tests drive it
+ * the way a user does: open it, verify and remember, and only then execute.
  */
 
 const OWNER_WALLET = new Wallet(`0x${'11'.repeat(32)}`);
@@ -121,8 +124,10 @@ function fake(options: Options = {}): Fake {
       if (which === safeSelector('nonce')) return safeInterface.encodeFunctionResult('nonce', [nonce.value]);
       if (which === safeSelector('getTransactionHash')) {
         if (hash.value !== null) return safeInterface.encodeFunctionResult('getTransactionHash', [hash.value]);
+        // A Safe hashes with its own chain's domain, so the fake follows the
+        // chain the wallet is on rather than the one the test started from.
         return safeInterface.encodeFunctionResult('getTransactionHash', [
-          referenceSafeTransactionHash(CHAIN, getAddress(SAFE), fromHashCall(data)),
+          referenceSafeTransactionHash(live.chainId, getAddress(SAFE), fromHashCall(data)),
         ]);
       }
       throw new Error(`unexpected Safe call ${which}`);
@@ -141,6 +146,8 @@ function fake(options: Options = {}): Fake {
   const signTypedData = vi.fn(options.sign ?? (async (domain, types, value) => OWNER_WALLET.signTypedData(
     domain, types, value as unknown as Record<string, unknown>,
   )));
+  // Fixing the cache at its initial value is what makes a switch look like a lag.
+  const cachedChainId = live.chainId;
   const session: WalletSession = {
     ...DISCONNECTED_SESSION,
     status: 'ready',
@@ -153,13 +160,22 @@ function fake(options: Options = {}): Fake {
       getAddress: vi.fn(async () => options.signerAccount ?? live.account),
       sendTransaction,
       signTypedData,
-      provider: { getNetwork: vi.fn(async () => ({ chainId: BigInt(live.chainId) })) },
+      provider: {
+        // BrowserProvider answers `getNetwork()` from a cache that lags a real
+        // switch, so the fake keeps that cache stale and reports the live chain
+        // only through the EIP-1193 request — the way a wallet extension behaves.
+        getNetwork: vi.fn(async () => ({ chainId: BigInt(cachedChainId) })),
+        send: vi.fn(async (method: string) => {
+          if (method === 'eth_chainId') return `0x${BigInt(live.chainId).toString(16)}`;
+          throw new Error(`unexpected provider method ${method}`);
+        }),
+      },
     } as unknown as JsonRpcSigner,
   };
   return { session, reader, sendTransaction, signTypedData, live, nonce, hash };
 }
 
-function Harness({ output, config }: { output: CompileOutput | null; config: DeploymentConfig }) {
+function Harness({ output, config }: { output: CompileOutput | null; config?: DeploymentConfig }) {
   const execution = useWalletExecution(output, config);
   return <>
     <WalletExecutionPanel execution={execution} />
@@ -175,91 +191,266 @@ function panel(session: WalletSession, over: { output?: CompileOutput | null; co
   </WalletSessionContext.Provider>;
 }
 
+/** Let the hook resolve its own per-chain deployment instead of overriding it. */
+function panelOnDeployment(session: WalletSession) {
+  return <WalletSessionContext.Provider value={session}>
+    <Harness output={OUTPUT} />
+  </WalletSessionContext.Provider>;
+}
+
 async function statusIs(label: string | RegExp) {
   await waitFor(() => expect(screen.getByTestId('lisa-status')).toHaveTextContent(label), { timeout: 2000 });
 }
 
 const execute = () => screen.getByRole('button', { name: 'Execute program' });
-const addressField = () => screen.getByRole('textbox', { name: 'Safe address' });
+const addField = () => screen.getByRole('textbox', { name: 'Safe address' });
+// The same button opens the book whether or not a Safe is already chosen.
+const openBook = () => fireEvent.click(screen.getByRole('button', { name: /^(Use Safe|Safe 0x)/ }));
+
+/** Type an address into the dialog and ask it to verify and remember. */
+async function verifyAndRemember(address: string = SAFE) {
+  fireEvent.change(addField(), { target: { value: address } });
+  fireEvent.click(screen.getByRole('button', { name: 'Verify and remember Safe' }));
+}
+
+async function chooseSafe(address: string = SAFE) {
+  openBook();
+  await verifyAndRemember(address);
+  await statusIs('Ready (Safe)');
+  // The dialog hands the strip over completely once it closes.
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+}
 
 async function reviewSafe(address: string = SAFE) {
-  fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-  fireEvent.change(addressField(), { target: { value: address } });
-  await statusIs('Ready (Safe)');
+  await chooseSafe(address);
   fireEvent.click(execute());
   await screen.findByRole('button', { name: 'Sign and execute' });
+}
+
+/** Nothing may become the target of an execution until it has verified. */
+function noActiveSafe() {
+  expect(window.localStorage.getItem('lisa-ide.active-safe.v1')).toBeNull();
+  expect(window.localStorage.getItem('lisa-ide.saved-safes.v1')).toBeNull();
+}
+
+function seedBook(entry: { address: string; chainId: string }) {
+  window.localStorage.setItem('lisa-ide.saved-safes.v1', JSON.stringify([entry]));
+  window.localStorage.setItem('lisa-ide.active-safe.v1', JSON.stringify(entry));
 }
 
 beforeEach(() => {
   window.localStorage.clear();
 });
 
-describe('Safe execution', () => {
-  it('asks for a Safe address instead of guessing one', async () => {
+describe('Safe accounts dialog', () => {
+  it('starts from the account path and only reads a Safe once one is chosen', async () => {
     const f = fake();
     render(panel(f.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    await statusIs('Add a Safe address');
-    expect(execute()).toBeDisabled();
+    await statusIs('Ready');
+    expect(screen.getByRole('button', { name: 'Use Safe' })).toBeInTheDocument();
     expect(f.reader.getCode).not.toHaveBeenCalledWith(SAFE);
+    expect(f.signTypedData).not.toHaveBeenCalled();
+
+    openBook();
+    expect(screen.getByRole('dialog', { name: 'Safe accounts' })).toBeInTheDocument();
+    expect(screen.getByText(/No Safe addresses saved in this browser yet/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Verify and remember Safe' })).toBeDisabled();
   });
 
-  it('refuses an address that is not one, without reading anything', async () => {
+  it('refuses an input that is not a 20-byte address without reading anything', async () => {
     const f = fake();
     render(panel(f.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    fireEvent.change(addressField(), { target: { value: '0xdead' } });
-    await statusIs('Safe address is not valid');
-    expect(execute()).toBeDisabled();
+    openBook();
+    fireEvent.change(addField(), { target: { value: '0xdead' } });
+    expect(screen.getByText('That is not a 20-byte address.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Verify and remember Safe' })).toBeDisabled();
     expect(f.reader.getCode).not.toHaveBeenCalledWith('0xdead');
   });
 
   it('reports a Safe address with no code deployed (§3)', async () => {
     const f = fake({ safeCode: '0x' });
     render(panel(f.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    fireEvent.change(addressField(), { target: { value: SAFE } });
-    await statusIs('Safe address has no code');
-    expect(execute()).toBeDisabled();
+    openBook();
+    await verifyAndRemember();
+    expect(await screen.findByText(/No contract is deployed at/i)).toBeInTheDocument();
+    noActiveSafe();
     expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 
   it('reports a Safe that needs more than one signature', async () => {
     const f = fake({ threshold: 2n, owners: [OWNER, STRANGER] });
     render(panel(f.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    fireEvent.change(addressField(), { target: { value: SAFE } });
-    await statusIs('Safe needs a single owner');
-    expect(execute()).toBeDisabled();
+    openBook();
+    await verifyAndRemember();
+    expect(await screen.findByText(/requires 2 signatures/i)).toBeInTheDocument();
+    noActiveSafe();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 
   it('reports an account that is not an owner of the Safe', async () => {
     const f = fake({ owners: [STRANGER] });
     render(panel(f.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    fireEvent.change(addressField(), { target: { value: SAFE } });
-    await statusIs('Not an owner of this Safe');
-    expect(execute()).toBeDisabled();
+    openBook();
+    await verifyAndRemember();
+    expect(await screen.findByText(/is not an owner of Safe/i)).toBeInTheDocument();
+    noActiveSafe();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 
   it('refuses a Safe version whose hashing it cannot reproduce', async () => {
     const f = fake({ safeVersion: '1.2.0' });
     render(panel(f.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    fireEvent.change(addressField(), { target: { value: SAFE } });
-    await statusIs('Unsupported Safe version');
-    expect(execute()).toBeDisabled();
+    openBook();
+    await verifyAndRemember();
+    expect(await screen.findByText(/reports version 1\.2\.0/i)).toBeInTheDocument();
+    noActiveSafe();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 
   it('reports an address that does not answer as a Safe', async () => {
     const f = fake({ versionCall: () => { throw new Error('execution reverted') } });
     render(panel(f.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    fireEvent.change(addressField(), { target: { value: SAFE } });
-    await statusIs('Address is not a Safe');
-    expect(execute()).toBeDisabled();
+    openBook();
+    await verifyAndRemember();
+    expect(await screen.findByText(/does not answer as a Safe/i)).toBeInTheDocument();
+    noActiveSafe();
+    expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 
+  it('verifies, remembers, and closes on success', async () => {
+    const f = fake();
+    render(panel(f.session));
+    await chooseSafe();
+    // Closing on success leaves the strip as the one place the target is shown.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: `Safe ${getAddress(SAFE).slice(0, 6)}…${getAddress(SAFE).slice(-4)}` })).toBeInTheDocument();
+    expect(f.reader.getCode).toHaveBeenCalledWith(getAddress(SAFE));
+  });
+
+  it('remembers the chosen Safe across mounts, on its own chain', async () => {
+    const first = fake();
+    const { unmount } = render(panel(first.session));
+    await chooseSafe();
+    unmount();
+
+    const second = fake();
+    render(panel(second.session));
+    // Restored from storage, verified again, with nothing re-typed or re-opened.
+    await statusIs('Ready (Safe)');
+    expect(screen.queryByRole('button', { name: 'Use Safe' })).not.toBeInTheDocument();
+  });
+
+  it('stops using the Safe without forgetting it', async () => {
+    const f = fake();
+    render(panel(f.session));
+    await chooseSafe();
+    openBook();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop using this Safe' }));
+    await statusIs(/^Ready$/);
+    // Still listed, still saved.
+    expect(screen.getByText(getAddress(SAFE))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Use Safe 0x1234…5678 on chain 1/ })).toBeInTheDocument();
+  });
+
+  it('removes a saved entry and stops using it when it was the active one', async () => {
+    const f = fake();
+    render(panel(f.session));
+    await chooseSafe();
+    openBook();
+    fireEvent.click(screen.getByRole('button', { name: /Remove saved Safe 0x1234…5678 on chain 1/ }));
+    expect(screen.getByText(/No Safe addresses saved in this browser yet/i)).toBeInTheDocument();
+    await statusIs(/^Ready$/);
+    expect(window.localStorage.getItem('lisa-ide.active-safe.v1')).toBeNull();
+    // The strip goes back to the account target rather than to a missing entry.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Use Safe' })).toBeInTheDocument();
+  });
+
+  it('offers the switch for an entry pinned to another chain instead of reading it here (§2)', async () => {
+    const f = fake();
+    seedBook({ address: getAddress(SAFE), chainId: '11155111' });
+    render(panel(f.session));
+    await statusIs('Safe saved on another network');
+    expect(f.reader.getCode).not.toHaveBeenCalledWith(getAddress(SAFE));
+
+    openBook();
+    expect(screen.getByRole('button', { name: /Switch network and use Safe 0x1234…5678 on chain 11155111/ })).toBeInTheDocument();
+    expect(screen.getByText(/Chain 11155111 · not the connected network/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Switch network and use Safe/ }));
+    // A wallet that resolves the switch without switching is refused, not trusted.
+    expect(await screen.findByText(/still on chain 1, not 11155111/i)).toBeInTheDocument();
+  });
+
+  it('switches to the Safe’s chain and verifies there, even while the provider still reports the old one', async () => {
+    const f = fake();
+    // The wallet really switches. BrowserProvider's `getNetwork()` is still the
+    // cached chain it was built with, which is exactly what a wallet extension
+    // looks like between `wallet_switchEthereumChain` and its `chainChanged` event.
+    const switched = vi.fn(async (chainId: string) => {
+      f.live.chainId = chainId;
+      (f.session as unknown as { chainId: string }).chainId = chainId;
+    });
+    f.session.switchChain = switched;
+    // Saved, but not chosen: the entry is on a chain the wallet is not on.
+    window.localStorage.setItem('lisa-ide.saved-safes.v1', JSON.stringify([{ address: getAddress(SAFE), chainId: '11155111' }]));
+    render(panelOnDeployment(f.session));
+    // The account path is irrelevant here: the real deployments are in use, so
+    // the fake account is delegated to something else.
+    await statusIs('Delegated to another implementation');
+
+    openBook();
+    fireEvent.click(screen.getByRole('button', { name: /Switch network and use Safe/ }));
+    await statusIs('Ready (Safe)');
+    expect(switched).toHaveBeenCalledWith('11155111');
+    // Verified on, and remembered against, the chain it actually lives on.
+    expect(JSON.parse(window.localStorage.getItem('lisa-ide.active-safe.v1') ?? 'null'))
+      .toEqual({ address: getAddress(SAFE), chainId: '11155111' });
+
+    fireEvent.click(execute());
+    await screen.findByRole('button', { name: 'Sign and execute' });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign and execute' }));
+    expect(await screen.findByText('Confirmed')).toBeInTheDocument();
+    // The digest and the broadcast are pinned to Sepolia, not to the stale cache.
+    expect(f.signTypedData.mock.calls[0][0]).toMatchObject({ chainId: 11155111n });
+    expect((f.sendTransaction.mock.calls[0][0] as { chainId: bigint }).chainId).toBe(11155111n);
+  });
+
+  it('stays open while a verification is in flight, because its answer still changes the target', async () => {
+    const f = fake();
+    let release!: () => void;
+    const parked = new Promise<void>(resolve => { release = resolve });
+    const call = f.session.reader!.call as ReturnType<typeof vi.fn>;
+    const original = call.getMockImplementation()!;
+    call.mockImplementation(async (input: { to: string; data: string }) => {
+      if (input.data.slice(0, 10) === safeSelector('getThreshold')) await parked;
+      return original(input);
+    });
+
+    render(panel(f.session));
+    openBook();
+    await verifyAndRemember();
+    // Nothing may close the window out from under a read that is still running.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Close' })).toBeDisabled());
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Safe accounts' })).toBeInTheDocument();
+
+    release();
+    await statusIs('Ready (Safe)');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('switches networks from the strip when the active Safe lives elsewhere', async () => {
+    const f = fake();
+    seedBook({ address: getAddress(SAFE), chainId: '11155111' });
+    render(panel(f.session));
+    await statusIs('Safe saved on another network');
+    fireEvent.click(screen.getByRole('button', { name: 'Switch network' }));
+    await waitFor(() => expect(f.session.switchChain).toHaveBeenCalledWith('11155111'));
+  });
+});
+
+describe('Safe execution', () => {
   it('signs the Safe transaction and delegatecalls the runtime with the program', async () => {
     const f = fake();
     render(panel(f.session));
@@ -406,15 +597,6 @@ describe('Safe execution', () => {
     expect(f.sendTransaction).not.toHaveBeenCalled();
   });
 
-  it('keeps the account path selected by default and never reads a Safe there', async () => {
-    const f = fake();
-    render(panel(f.session));
-    await statusIs('Ready');
-    expect(screen.queryByRole('textbox', { name: 'Safe address' })).not.toBeInTheDocument();
-    expect(f.reader.getCode).not.toHaveBeenCalledWith(SAFE);
-    expect(f.signTypedData).not.toHaveBeenCalled();
-  });
-
   it('re-reads the Safe after a receipt, so a second run is reviewed on the next nonce', async () => {
     const f = fake({ nonce: 0n });
     render(panel(f.session));
@@ -435,21 +617,5 @@ describe('Safe execution', () => {
     expect(f.signTypedData).toHaveBeenCalledTimes(2);
     expect(f.signTypedData.mock.calls[1][2]).toMatchObject({ nonce: 1n });
     expect(f.sendTransaction).toHaveBeenCalledTimes(2);
-  });
-
-  it('remembers the Safe address for the next visit on the same chain', async () => {
-    const first = fake();
-    const { unmount } = render(panel(first.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    fireEvent.change(addressField(), { target: { value: SAFE } });
-    await statusIs('Ready (Safe)');
-    unmount();
-
-    const second = fake();
-    render(panel(second.session));
-    fireEvent.click(screen.getByRole('button', { name: 'Safe' }));
-    // Restored from storage, already checksummed, with nothing re-typed.
-    await waitFor(() => expect(addressField()).toHaveValue(getAddress(SAFE)));
-    await statusIs('Ready (Safe)');
   });
 });
