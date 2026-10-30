@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { getAddress } from 'ethers';
 import {
-  canExecute, deriveGate, describeGate, inspectionIsCurrent, normalizeChainId,
-  type Inspection, type SessionSnapshot,
+  canExecute, deriveGate, describeGate, inspectionIsCurrent, normalizeChainId, safeInspectionIsCurrent,
+  type Inspection, type SafeInspection, type SessionSnapshot,
 } from './executionState';
 import type { DeploymentConfig } from '../lisa-account/types';
 
@@ -133,5 +134,115 @@ describe('deriveGate', () => {
     expect(describeGate({ kind: 'unconfigured' })).toBe('LISA deployment not configured');
     expect(describeGate({ kind: 'ready', account: ACCOUNT, runtime: CONFIG.runtime })).toBe('Ready');
     expect(describeGate({ kind: 'no-program' })).toBe('No executable program');
+  });
+});
+
+/**
+ * Safe mode has its own way to be unready: an address to enter, a contract that
+ * has to answer as a Safe, and a nonce that a signature will bind to.
+ */
+describe('deriveGate in Safe mode', () => {
+  const SAFE = '0x1234567890abcdef1234567890abcdef12345678';
+
+  const READY_SAFE: SafeInspection['status'] = {
+    kind: 'ready', safe: getAddress(SAFE), owner: ACCOUNT, runtime: CONFIG.runtime, version: '1.4.1', nonce: 3n,
+  };
+
+  function safeGate(status: SafeInspection['status'] | null, overrides: {
+    safeAddress?: string;
+    error?: string | null;
+    hasProgram?: boolean;
+    session?: Partial<SessionSnapshot>;
+    owner?: string;
+  } = {}) {
+    return deriveGate({
+      session: { ...READY, ...overrides.session },
+      config: CONFIG,
+      inspection: null,
+      inspectionError: null,
+      hasProgram: overrides.hasProgram ?? true,
+      mode: 'safe',
+      safeAddress: overrides.safeAddress ?? SAFE,
+      safeInspection: status === null ? null : {
+        safe: getAddress(SAFE), owner: overrides.owner ?? ACCOUNT, chainId: '1', status,
+      },
+      safeInspectionError: overrides.error ?? null,
+    });
+  }
+
+  it('asks for an address before it reads anything', () => {
+    const missing = safeGate(null, { safeAddress: '   ' });
+    expect(missing).toEqual({ kind: 'safe-address-missing' });
+    expect(canExecute(missing)).toBe(false);
+    expect(describeGate(missing)).toBe('Add a Safe address');
+    expect(safeGate(null, { safeAddress: '0x1234' })).toEqual({ kind: 'safe-address-invalid' });
+  });
+
+  it('is inspecting until the Safe answers, and reports a transport failure rather than a verdict', () => {
+    expect(safeGate(null)).toEqual({ kind: 'inspecting' });
+    expect(safeGate(null, { error: 'Network request failed.' })).toEqual({ kind: 'rpc-error', reason: 'Network request failed.' });
+  });
+
+  it('discards an inspection taken for another Safe, owner, or chain (§14, §16)', () => {
+    expect(safeGate(READY_SAFE, { safeAddress: '0x0987654321098765432109876543210987654321' })).toEqual({ kind: 'inspecting' });
+    expect(safeGate(READY_SAFE, { owner: '0x2222222222222222222222222222222222222222' })).toEqual({ kind: 'inspecting' });
+    expect(safeGate(READY_SAFE, { session: { chainId: null } })).toEqual({ kind: 'inspecting' });
+  });
+
+  it('is ready with a single-owner Safe on the configured runtime and a program', () => {
+    const ready = safeGate(READY_SAFE);
+    expect(ready).toEqual({
+      kind: 'ready-safe', safe: getAddress(SAFE), owner: ACCOUNT, runtime: CONFIG.runtime, version: '1.4.1', nonce: 3n,
+    });
+    expect(canExecute(ready)).toBe(true);
+    expect(safeGate(READY_SAFE, { hasProgram: false })).toEqual({ kind: 'no-program' });
+  });
+
+  it('fails closed for every other Safe state', () => {
+    const cases: Array<[SafeInspection['status'], string]> = [
+      [{ kind: 'unconfigured' }, 'unconfigured'],
+      [{ kind: 'invalid-config', reason: 'bad' }, 'invalid-config'],
+      [{ kind: 'runtime-no-code', runtime: CONFIG.runtime }, 'runtime-no-code'],
+      [{ kind: 'safe-no-code', safe: getAddress(SAFE) }, 'safe-no-code'],
+      [{ kind: 'not-a-safe', safe: getAddress(SAFE), reason: 'reverted' }, 'safe-not-a-safe'],
+      [{ kind: 'unsupported-version', safe: getAddress(SAFE), version: '1.2.0' }, 'safe-unsupported-version'],
+      [{ kind: 'not-owner', safe: getAddress(SAFE), owner: ACCOUNT }, 'safe-not-owner'],
+      [{ kind: 'threshold', safe: getAddress(SAFE), threshold: 2 }, 'safe-threshold'],
+    ];
+    for (const [status, kind] of cases) {
+      const result = safeGate(status);
+      expect(result.kind, kind).toBe(kind);
+      expect(canExecute(result), kind).toBe(false);
+      expect(describeGate(result).length, kind).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps the account path untouched when the mode is not safe', () => {
+    const eoa = deriveGate({
+      session: READY,
+      config: CONFIG,
+      inspection: { account: ACCOUNT, chainId: '1', status: { kind: 'undelegated' } },
+      inspectionError: null,
+      hasProgram: true,
+      mode: 'eoa',
+      safeAddress: SAFE,
+      safeInspection: { safe: getAddress(SAFE), owner: ACCOUNT, chainId: '1', status: READY_SAFE },
+    });
+    expect(eoa).toEqual({ kind: 'undelegated' });
+  });
+});
+
+describe('safeInspectionIsCurrent', () => {
+  const stored: SafeInspection = {
+    safe: getAddress('0x1234567890abcdef1234567890abcdef12345678'),
+    owner: ACCOUNT, chainId: '1',
+    status: { kind: 'ready', safe: getAddress('0x1234567890abcdef1234567890abcdef12345678'), owner: ACCOUNT, runtime: CONFIG.runtime, version: '1.4.1', nonce: 0n },
+  };
+
+  it('matches case-insensitively on Safe and owner, and exactly on chain', () => {
+    expect(safeInspectionIsCurrent(stored, '0x1234567890ABCDEF1234567890ABCDEF12345678', ACCOUNT.toLowerCase(), '1')).toBe(true);
+    expect(safeInspectionIsCurrent(stored, stored.safe, ACCOUNT, '11155111')).toBe(false);
+    expect(safeInspectionIsCurrent(stored, stored.safe, '0x2222222222222222222222222222222222222222', '1')).toBe(false);
+    expect(safeInspectionIsCurrent(null, stored.safe, ACCOUNT, '1')).toBe(false);
   });
 });

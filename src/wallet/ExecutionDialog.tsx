@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, Typography } from '@mui/material';
 import { ReceiptView } from './ReceiptView';
 import type { TransactionPhase } from './executionState';
 import type { ExecutionController } from './useWalletExecution';
@@ -30,7 +30,7 @@ function ExecutionFlow({ phase }: { phase: TransactionPhase }) {
 
 /**
  * The execution window: the one place a program is verified before it can
- * touch a chain, in both authoring modes. It opens on an explicit review and
+ * touch a chain, in every authoring mode. It opens on an explicit review and
  * stays with the transaction through broadcast and receipt, so "Execute" is
  * never a click that quietly becomes a broadcast.
  *
@@ -40,7 +40,7 @@ function ExecutionFlow({ phase }: { phase: TransactionPhase }) {
  */
 
 export function ExecutionDialog({ execution }: { execution: ExecutionController }) {
-  const { phase, output, session } = execution;
+  const { phase, output, session, reviewTarget } = execution;
   const reviewing = phase.kind === 'review';
   // After broadcast the window becomes optional: pending and failure details
   // can move inline on close. While the wallet popup holds the transaction,
@@ -58,6 +58,8 @@ export function ExecutionDialog({ execution }: { execution: ExecutionController 
     void execution.send();
   };
 
+  const confirmingSafe = reviewing && reviewTarget?.kind === 'safe';
+
   return <Dialog
     open={execution.dialogOpen}
     onClose={() => {
@@ -73,25 +75,65 @@ export function ExecutionDialog({ execution }: { execution: ExecutionController 
     <DialogTitle id="execution-dialog-title">Execute program</DialogTitle>
     {phase.kind !== 'idle' && <ExecutionFlow phase={phase} />}
     <DialogContent>
-      {reviewing && output !== null && session.account !== null && <Stack className="execution-review" spacing={1.25} sx={{ py: 0.5 }}>
-        <Typography variant="body2" color="text.secondary">
-          Review the destination and compiled program. Your wallet will ask you to approve before anything is sent.
-        </Typography>
-        <Box className="execution-review-field">
-          <Typography component="div" className="execution-review-label">Destination account</Typography>
-          <Box component="code" className="execution-review-value">{session.account}</Box>
-          <Typography variant="caption" color="text.secondary" display="block">The transaction executes through this account.</Typography>
-        </Box>
-        <Box className="execution-review-field">
-          <Typography component="div" className="execution-review-label">Program hash</Typography>
-          <Box component="code" className="execution-review-value">{output.programHash}</Box>
-        </Box>
-        <Box className="execution-review-meta">
-          <Box><Typography component="div" className="execution-review-label">Network</Typography><Typography variant="body2">Chain {session.chainId ?? '?'}</Typography></Box>
-          <Box><Typography component="div" className="execution-review-label">Payload</Typography><Typography variant="body2">{output.byteSize} bytes</Typography></Box>
-          <Box><Typography component="div" className="execution-review-label">Method</Typography><Typography variant="body2" className="execution-review-mono">executeLisa(bytes)</Typography></Box>
-          <Box><Typography component="div" className="execution-review-value-pair">Value <br />0 wei</Typography></Box>
-        </Box>
+      {reviewing && output !== null && session.account !== null && reviewTarget !== null && <Stack className="execution-review" spacing={1.25} sx={{ py: 0.5 }}>
+        {reviewTarget.kind === 'safe'
+          ? <>
+            <Typography variant="body2" color="text.secondary">
+              Review the Safe and the compiled program. Your wallet will ask you to sign one Safe transaction; the Safe
+              executes it, and the program with it, before that transaction returns.
+            </Typography>
+            <Box className="execution-review-field">
+              <Typography component="div" className="execution-review-label">Safe</Typography>
+              <Box component="code" className="execution-review-value">{reviewTarget.safe}</Box>
+              <Typography variant="caption" color="text.secondary" display="block">The Safe holds the authority this program runs with.</Typography>
+            </Box>
+            <Box className="execution-review-field">
+              <Typography component="div" className="execution-review-label">Signer (owner)</Typography>
+              <Box component="code" className="execution-review-value">{reviewTarget.owner}</Box>
+              <Typography variant="caption" color="text.secondary" display="block">Your account signs; it is not the account the program runs as.</Typography>
+            </Box>
+            <Box className="execution-review-field">
+              <Typography component="div" className="execution-review-label">Runtime executed by the Safe</Typography>
+              <Box component="code" className="execution-review-value">{reviewTarget.runtime}</Box>
+              <Typography variant="caption" color="text.secondary" display="block">The Safe delegatecalls this LISA runtime, with the program as its calldata.</Typography>
+            </Box>
+            <Box className="execution-review-field">
+              <Typography component="div" className="execution-review-label">Program hash</Typography>
+              <Box component="code" className="execution-review-value">{output.programHash}</Box>
+            </Box>
+            <Box className="execution-review-meta">
+              <Box><Typography component="div" className="execution-review-label">Network</Typography><Typography variant="body2">Chain {session.chainId ?? '?'}</Typography></Box>
+              <Box><Typography component="div" className="execution-review-label">Payload</Typography><Typography variant="body2">{output.byteSize} bytes</Typography></Box>
+              <Box><Typography component="div" className="execution-review-label">Method</Typography><Typography variant="body2" className="execution-review-mono">execTransaction · delegatecall</Typography></Box>
+              <Box><Typography component="div" className="execution-review-label">Safe nonce</Typography><Typography variant="body2">{reviewTarget.nonce.toString()}</Typography></Box>
+              <Box><Typography component="div" className="execution-review-value-pair">Value <br />0 wei</Typography></Box>
+            </Box>
+            <Alert severity="warning" className="transaction-alert">
+              Inside the Safe, <code>SELF</code> and <code>CALLER</code> are both the Safe, and every call the program makes
+              reaches the network as the Safe. That includes the Safe&apos;s own owner and threshold functions, so a program
+              can hand control of the Safe to someone else. Only execute programs you trust.
+            </Alert>
+          </>
+          : <>
+            <Typography variant="body2" color="text.secondary">
+              Review the destination and compiled program. Your wallet will ask you to approve before anything is sent.
+            </Typography>
+            <Box className="execution-review-field">
+              <Typography component="div" className="execution-review-label">Destination account</Typography>
+              <Box component="code" className="execution-review-value">{reviewTarget.account}</Box>
+              <Typography variant="caption" color="text.secondary" display="block">The transaction executes through this account.</Typography>
+            </Box>
+            <Box className="execution-review-field">
+              <Typography component="div" className="execution-review-label">Program hash</Typography>
+              <Box component="code" className="execution-review-value">{output.programHash}</Box>
+            </Box>
+            <Box className="execution-review-meta">
+              <Box><Typography component="div" className="execution-review-label">Network</Typography><Typography variant="body2">Chain {session.chainId ?? '?'}</Typography></Box>
+              <Box><Typography component="div" className="execution-review-label">Payload</Typography><Typography variant="body2">{output.byteSize} bytes</Typography></Box>
+              <Box><Typography component="div" className="execution-review-label">Method</Typography><Typography variant="body2" className="execution-review-mono">executeLisa(bytes)</Typography></Box>
+              <Box><Typography component="div" className="execution-review-value-pair">Value <br />0 wei</Typography></Box>
+            </Box>
+          </>}
       </Stack>}
       {phase.kind === 'awaiting-confirmation' && (
         <Box className="transaction-preparing" role="status">
@@ -113,7 +155,9 @@ export function ExecutionDialog({ execution }: { execution: ExecutionController 
       {reviewing && <>
         {/* Focus sits on the way out, not on the irreversible button. */}
         <Button onClick={execution.cancelReview} autoFocus>Cancel</Button>
-        <Button color="secondary" variant="contained" onClick={confirm}>Confirm and send</Button>
+        <Button color="secondary" variant="contained" onClick={confirm}>
+          {confirmingSafe ? 'Sign and execute' : 'Confirm and send'}
+        </Button>
       </>}
       {dismissible && <Button color="primary" variant="contained" onClick={() => execution.dismiss()} autoFocus>Close</Button>}
     </DialogActions>}

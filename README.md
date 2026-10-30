@@ -93,6 +93,58 @@ disabled until the next compile from the editor or canvas.
 Native transaction value is fixed at `0` wei in this version. Installing a delegation ("Enable LISA")
 is not implemented: the account must already be delegated to the configured LisaAccount.
 
+### Executing through a single-owner Safe
+
+The strip's **Execute through** switch adds a second target: a Safe that runs the program for you. No
+delegation, module, or deployment is involved, and the connected account does not need any delegation
+at all — a 1-of-1 Safe can execute a LISA program in **one ordinary transaction**:
+
+```
+execTransaction(
+  to          = configured LISA runtime   // not LisaAccount.executeLisa
+  value       = 0
+  data        = the compiled program bytes
+  operation   = 1                          // DELEGATECALL
+  safeTxGas   = baseGas = gasPrice = 0     // forward what is left, no refund machinery
+  gasToken    = refundReceiver = 0
+  signatures  = the owner's EIP-712 SafeTx signature
+)
+```
+
+The Safe delegatecalls the runtime itself, so the runtime executes the program inside the Safe's
+context and everything finishes before that transaction returns. Because the threshold is 1, sending
+it *is* executing it: there is nothing to propose to the Safe Transaction Service and no second
+approval to wait for. The flow is **Safe address → review → sign the typed data → send the transaction
+to the Safe → receipt**, and your wallet will ask twice (once to sign, once to broadcast).
+
+Paste the Safe address into the strip; it is remembered per chain in `localStorage`. Only these Safes
+are accepted, and anything else fails closed with its own reason:
+
+- **Not a 1-of-1 Safe.** A different threshold cannot be satisfied by one wallet, so it is refused
+  rather than half-executed.
+- **Not an owner.** The connected account must appear in `getOwners()`.
+- **No code, or not a Safe.** `VERSION()`, `getOwners()` and `getThreshold()` must answer.
+- **Version 1.3.0 / 1.4.1 only** (including the `+L2` variants). 1.1.1 and 1.2.0 hash with
+  `EIP712Domain(address verifyingContract)`, without the chain id, so the digest this app signs is not
+  the one they expect.
+- **Runtime with no code.** A delegatecall to an empty address succeeds as a no-op, which would look
+  like a confirmed execution that ran nothing.
+
+Before anything is signed, the app computes the EIP-712 digest and compares it with the Safe's own
+`getTransactionHash(...)`. The review captures the Safe nonce; if the nonce moved by the time you
+confirm, nothing is signed. After signing, the signature must be 65 bytes with `v` 27 or 28 — a `v` of
+1 means "this hash was pre-approved" and is never sent — and it must recover the reviewed owner.
+Nothing is retried and no signature is reused under a different nonce.
+
+> **This runs with the Safe's authority.** Inside the delegatecall `SELF` and `CALLER` are both the
+> Safe, every call the program makes reaches the network with the Safe as `msg.sender`, and balances
+> read are the Safe's. The program can also call the Safe's own owner and threshold functions, so a
+> program you execute can hand control of the Safe to someone else. Only execute programs you trust.
+
+The connected account is the signer and pays the gas; it is not the account the program runs as. Both
+targets share the same gate, review window, and receipt handling, and the account path
+(`executeLisa(bytes)` through an EIP-7702 delegation) is unchanged.
+
 ## Development
 
 Requires Node.js 22 or newer.

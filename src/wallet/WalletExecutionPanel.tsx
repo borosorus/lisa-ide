@@ -1,4 +1,4 @@
-import { Button, Chip, Divider, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
+import { Button, Chip, Divider, IconButton, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import CheckRoundedIcon from '@mui/icons-material/CheckRounded';
 import ContentCopyRoundedIcon from '@mui/icons-material/ContentCopyRounded';
 import ErrorOutlineRoundedIcon from '@mui/icons-material/ErrorOutlineRounded';
@@ -10,10 +10,11 @@ import { describeGate, type ExecutionGate } from './executionState';
 import type { ExecutionController } from './useWalletExecution';
 
 /**
- * The wallet strip: session identity and LISA readiness, one row shared by
- * both authoring modes. It is a pure view of the execution controller and a
- * pure status surface — the Execute action belongs to the Output pane, the
- * program's own home, and the review itself happens in the centered dialog.
+ * The wallet strip: session identity, execution target, and LISA readiness, one
+ * row shared by both authoring modes. It is a pure view of the execution
+ * controller and a pure status surface — the Execute action belongs to the
+ * Output pane, the program's own home, and the review itself happens in the
+ * centered dialog.
  */
 
 interface Props {
@@ -42,14 +43,26 @@ function gateSummary(gate: ExecutionGate): string {
     case 'runtime-no-code': return 'Runtime unavailable';
     case 'rpc-error': return 'Inspection failed';
     case 'no-program': return 'No program';
+    case 'safe-address-missing': return 'No Safe address';
+    case 'safe-address-invalid': return 'Invalid Safe address';
+    case 'safe-no-code': return 'Safe not deployed';
+    case 'safe-not-a-safe': return 'Not a Safe';
+    case 'safe-unsupported-version': return 'Unsupported Safe';
+    case 'safe-not-owner': return 'Not a Safe owner';
+    case 'safe-threshold': return 'Multi-owner Safe';
+    case 'ready-safe': return 'Ready (Safe)';
   }
 }
 
 export function WalletExecutionPanel({ execution }: Props) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-  const { session, gate, phase, alert } = execution;
-  const statusColor = gate.kind === 'ready' ? 'success'
+  const { session, gate, phase, alert, mode, safeAddress } = execution;
+  const ready = gate.kind === 'ready' || gate.kind === 'ready-safe';
+  // Changing where a program runs while it is being signed or tracked would make
+  // the strip disagree with the transaction it is describing.
+  const busy = phase.kind === 'awaiting-confirmation' || phase.kind === 'submitted';
+  const statusColor = ready ? 'success'
     : gate.kind === 'inspecting' || gate.kind === 'wallet-connecting' ? 'default'
       : alert?.severity === 'error' ? 'error' : 'warning';
   const statusDetails = [describeGate(gate), alert?.text, execution.switchMessage].filter(Boolean).join('\n\n');
@@ -94,10 +107,38 @@ export function WalletExecutionPanel({ execution }: Props) {
           {session.status === 'loading' ? 'Connecting…' : 'Connect wallet'}
         </Button>}
       <Divider orientation="vertical" flexItem />
+      <Typography variant="overline" color="text.secondary">Execute through</Typography>
+      {/* Two buttons rather than a menu: the target is a standing choice, and it
+          must stay readable while a program is being reviewed. */}
+      <Tooltip title="Run the program through this account's own EIP-7702 delegation">
+        <span>
+          <Button size="small" aria-pressed={mode === 'eoa'} disabled={busy}
+            variant={mode === 'eoa' ? 'contained' : 'outlined'} color={mode === 'eoa' ? 'secondary' : 'primary'}
+            onClick={() => execution.setMode('eoa')}>Account</Button>
+        </span>
+      </Tooltip>
+      <Tooltip title="Run the program inside a single-owner Safe by delegatecalling the LISA runtime">
+        <span>
+          <Button size="small" aria-pressed={mode === 'safe'} disabled={busy}
+            variant={mode === 'safe' ? 'contained' : 'outlined'} color={mode === 'safe' ? 'secondary' : 'primary'}
+            onClick={() => execution.setMode('safe')}>Safe</Button>
+        </span>
+      </Tooltip>
+      {mode === 'safe' && <TextField
+        size="small"
+        label="Safe address"
+        title="Single-owner Safe (threshold 1) on the configured chain"
+        value={safeAddress}
+        disabled={busy}
+        onChange={event => execution.setSafeAddress(event.target.value)}
+        sx={{ width: 300 }}
+      />}
+      <Divider orientation="vertical" flexItem />
       <Typography variant="overline" color="text.secondary">LISA</Typography>
       <Chip size="small" color={statusColor} label={gateSummary(gate)} />
       <span className="sr-only" data-testid="lisa-status">{describeGate(gate)}</span>
-      {gate.kind === 'ready' && <Chip size="small" variant="outlined" title={gate.runtime} label={`Runtime ${shortAddress(gate.runtime)}`} />}
+      {gate.kind === 'ready-safe' && <Chip size="small" variant="outlined" title={gate.safe} label={`Safe ${shortAddress(gate.safe)}`} />}
+      {ready && <Chip size="small" variant="outlined" title={gate.runtime} label={`Runtime ${shortAddress(gate.runtime)}`} />}
       {alert !== null && phase.kind !== 'review' && <>
         <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{statusDetails}</span>}>
           <IconButton size="small" aria-label="LISA status details">
@@ -115,7 +156,9 @@ export function WalletExecutionPanel({ execution }: Props) {
           </span>
         </Tooltip>}
       </>}
-      {gate.kind === 'ready' && <Tooltip title="LISA account is ready to execute this program">
+      {ready && <Tooltip title={gate.kind === 'ready-safe'
+        ? 'The Safe will delegatecall the runtime for this program'
+        : 'LISA account is ready to execute this program'}>
         <TaskAltRoundedIcon fontSize="small" color="success" aria-label="LISA ready" />
       </Tooltip>}
     </Stack>

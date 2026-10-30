@@ -40,6 +40,7 @@ const MESSAGES: Readonly<Record<LisaErrorCode, string>> = {
   UNSUPPORTED_DELEGATION: 'Wallet cannot install the configured delegation.',
   UNKNOWN_DELEGATION: 'Account is delegated to an unknown implementation.',
   RUNTIME_MISMATCH: 'LisaAccount is bound to a different LISA runtime.',
+  SAFE_NOT_READY: 'Safe is not ready to execute this program.',
   TRANSACTION_REVERTED: 'Transaction reverted.',
   RPC_UNAVAILABLE: 'Network request failed.',
   UNKNOWN: 'Request failed.',
